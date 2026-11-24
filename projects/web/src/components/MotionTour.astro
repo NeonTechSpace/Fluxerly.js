@@ -80,7 +80,22 @@
         }
 
         const onKey = (event: KeyboardEvent) => {
-            if (event.key === "Escape") close()
+            if (event.key === "Escape") {
+                close()
+                return
+            }
+            if (event.key === "Tab") {
+                event.preventDefault()
+                const focusables = [...card.querySelectorAll<HTMLElement>('a[href], button:not(:disabled), [tabindex]:not([tabindex="-1"])')]
+                if (focusables.length === 0) {
+                    card.focus({ preventScroll: true })
+                    return
+                }
+                const first = focusables[0]!
+                const last = focusables[focusables.length - 1]!
+                if (event.shiftKey) (document.activeElement === first || !card.contains(document.activeElement) ? last : first).focus({ preventScroll: true })
+                else (document.activeElement === last || !card.contains(document.activeElement) ? first : last).focus({ preventScroll: true })
+            }
         }
         const onScroll = () => {
             if (Math.abs(window.scrollY - fromY) > scrollAway) close()

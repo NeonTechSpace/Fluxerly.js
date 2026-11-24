@@ -260,6 +260,32 @@ import { links } from "../lib/links"
         transform: rotate(-12deg) scale(1.06);
     }
 
+    /* Time stopped: no travelling sheen, no spinning rim and no turning coin */
+    :global(html[data-still]) .primary::after {
+        display: none;
+    }
+
+    :global(html[data-still]) .secondary {
+        transition:
+            --nebula var(--speed-slow) ease,
+            color var(--speed-normal) ease,
+            box-shadow var(--speed-slow) ease;
+    }
+
+    :global(html[data-still]) .secondary:hover,
+    :global(html[data-still]) .secondary:focus-visible {
+        --rim-angle: 118deg;
+    }
+
+    :global(html[data-still]) .coin :global(svg) {
+        transition: none;
+    }
+
+    :global(html[data-still]) .github:hover .coin :global(svg),
+    :global(html[data-still]) .github:focus-visible .coin :global(svg) {
+        transform: none;
+    }
+
     @media (max-width: 899px), (max-height: 480px), (max-aspect-ratio: 4/5) {
         .controls {
             flex-wrap: wrap;

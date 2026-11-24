@@ -57,8 +57,9 @@ export function createBow(conductor: HTMLElement, mascot: HTMLImageElement): Bow
             })
         })
 
-    // Draws the copy from the painted conductor's present file, with the bow and what lies under it at the same width. Each is a file
-    // on its own, whose size is its pixels: the page's picture reports its size in CSS pixels, which the screen's density shrinks
+    // Draws the copy from the painted conductor's present file, with the bow and what lies under it at the same width. Reuses
+    // the already-decoded mascot element when its source still matches instead of decoding a second copy, while reading the
+    // true pixel dimensions from the bow overlay (whose size is never density-shrunk by srcset)
     const draw = async () => {
         const source = mascot.currentSrc
         if (source === drawn) return
@@ -70,15 +71,21 @@ export function createBow(conductor: HTMLElement, mascot: HTMLImageElement): Bow
             image.src = address
             return image
         }
-        const painted = file(source)
         const cut = file(bowFile(width))
         const under = file(bowUnderFile(width))
-        await Promise.all([painted.decode(), cut.decode(), under.decode()])
+        await Promise.all([cut.decode(), under.decode()])
         if (released) throw new Error("released")
         if (turn !== asked) return
-        // At the painted conductor's own size, so the copy is exactly as sharp. All of it in one task, so no frame shows it part drawn
-        body.width = painted.naturalWidth
-        body.height = painted.naturalHeight
+        let painted: HTMLImageElement = mascot
+        if (!mascot.complete || mascot.naturalWidth === 0 || mascot.currentSrc !== source) {
+            painted = file(source)
+            await painted.decode()
+            if (released) throw new Error("released")
+            if (turn !== asked) return
+        }
+        // At the painted conductor's own pixel size, so the copy is exactly as sharp. All of it in one task, so no frame shows it part drawn
+        body.width = cut.naturalWidth
+        body.height = cut.naturalHeight
         const pen = body.getContext("2d")
         if (!pen) throw new Error("no 2D canvas to draw the conductor without its bow")
         pen.drawImage(painted, 0, 0, body.width, body.height)

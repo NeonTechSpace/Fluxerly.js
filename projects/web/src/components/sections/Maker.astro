@@ -170,10 +170,18 @@ const view = chartView(downloadHistory(snapshot.days))
             readout.style.transform = `translate(${left.toFixed(1)}px, ${top.toFixed(1)}px)`
         }
 
+        const onOutsidePointerDown = (event: PointerEvent) => {
+            if (!plot.contains(event.target as Node)) hide()
+        }
+        const onDocumentKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") hide()
+        }
+
         // One reading at a time: a hairline at its step, a dot on the line and the numbers beside it
         const show = (index: number) => {
+            const wasHidden = shown < 0
             shown = Math.max(0, Math.min(readings.length - 1, index))
-            const reading = readings[shown]
+            const reading = readings[shown]!
             for (const element of [cross, marker]) element.style.left = `${reading.x}%`
             marker.style.top = `${reading.y}%`
             parts.label!.textContent = reading.label
@@ -181,10 +189,17 @@ const view = chartView(downloadHistory(snapshot.days))
             parts.total!.textContent = reading.total
             plot.toggleAttribute("data-reading", true)
             place(reading)
+            if (wasHidden) {
+                document.addEventListener("pointerdown", onOutsidePointerDown)
+                document.addEventListener("keydown", onDocumentKeyDown)
+            }
         }
         const hide = () => {
+            if (shown < 0) return
             shown = -1
             plot.toggleAttribute("data-reading", false)
+            document.removeEventListener("pointerdown", onOutsidePointerDown)
+            document.removeEventListener("keydown", onDocumentKeyDown)
         }
 
         // The nearest step to the pointer, so the reader aims at a moment and never at the thin line
@@ -431,6 +446,7 @@ const view = chartView(downloadHistory(snapshot.days))
         position: relative;
         flex: 1;
         min-height: clamp(200px, 14vw, 280px);
+        cursor: crosshair;
         border-radius: var(--corner-small);
         corner-shape: squircle;
         outline-offset: 6px;

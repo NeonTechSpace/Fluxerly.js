@@ -1,6 +1,6 @@
 // Runs on every page load in both states. Keep it small: Three.js arrives only through the
 // dynamic imports below. Still loads the frame chunk once to paint its frozen sky and then
-// holds no WebGL. GSAP comes only with the live scene.
+// holds no WebGL.
 
 import { getExperience, subscribeExperience, type Experience } from "./experience"
 import { skyIconsKey, specs } from "../scene/companion-specs"
@@ -19,7 +19,7 @@ export function startHero(hero: HTMLElement) {
     const iconsHere = placeSkyIcons(hero)
     watchControlReflections(hero)
     // The scene's start holds the page up for a moment, so the page gets its first frame with the icons in it first
-    iconsHere.then(afterPaint).then(() => driveScene(hero))
+    void iconsHere.then(afterPaint).then(() => driveScene(hero))
 }
 
 // The icons in the sky take the places the scene will draw them in, read from the same numbers, so nothing appears or moves when it takes over
@@ -46,7 +46,7 @@ function placeSkyIcons(hero: HTMLElement): Promise<unknown> {
         })
     }
     new ResizeObserver(place).observe(hero)
-    document.fonts?.ready.then(place)
+    void document.fonts?.ready.then(place)
     place()
     // Not longer than a slow network's patience: the scene doesn't wait for a picture that never comes
     const mascot = hero.querySelector<HTMLImageElement>("[data-mascot]")
@@ -54,7 +54,7 @@ function placeSkyIcons(hero: HTMLElement): Promise<unknown> {
     // Already here, as on a return to a phone's page, they are simply there. Only pictures that had to arrive fade in. Where the sky has icons the head decides this, see Hero.astro
     if (pictures.every((picture) => picture.complete && picture.naturalWidth > 0)) document.documentElement.dataset.artHere = ""
     const decoded = Promise.all(pictures.map((picture) => picture.decode().catch(() => {})))
-    decoded.then(() => {
+    void decoded.then(() => {
         const shown = icons.filter((icon) => !icon.hidden)
         if (!shown.length || !shown.every((icon) => icon.complete && icon.naturalWidth > 0)) return
         try {
@@ -80,7 +80,7 @@ function watchControlReflections(hero: HTMLElement) {
         wrap.style.setProperty("--reflect-gap", `${(gap * 2).toFixed(1)}px`)
     }
     new ResizeObserver(update).observe(hero)
-    document.fonts?.ready.then(update)
+    void document.fonts?.ready.then(update)
     update()
 }
 
@@ -136,6 +136,8 @@ function driveScene(hero: HTMLElement) {
         }
     }
 
-    apply(getExperience())
-    subscribeExperience(apply)
+    void apply(getExperience())
+    subscribeExperience((mode) => {
+        void apply(mode)
+    })
 }

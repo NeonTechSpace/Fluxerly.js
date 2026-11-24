@@ -244,13 +244,13 @@ const facts = ["Results instead of throws", "Prefix commands with typed argument
         }
     }
 
-    /* Time stopped: the marks keep still when pointed at */
-    :global(.night[data-still]) .wave-mark {
+    /* Time stopped: the icons keep still when pointed at */
+    :global(html[data-still]) .item-icon {
         transition: none;
     }
 
-    :global(.night[data-still]) .item:hover .wave-mark {
+    :global(html[data-still]) .item:hover .item-icon {
         transform: none;
-        filter: none;
+        filter: drop-shadow(0 4px 6px rgb(0 0 0 / 0.45));
     }
 </style>

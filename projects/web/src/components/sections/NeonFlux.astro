@@ -208,7 +208,7 @@ const proofs = [
         </div>
 
         <div class="bot" data-rise>
-            <div class="orbit" aria-hidden="true">
+            <div class="orbit" aria-hidden="true" data-orbit>
                 <img src={iconSrc("guard-shield", 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
                 <img src={iconSrc("events-bell", 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
                 <img src={iconSrc("support-lifebuoy", 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
@@ -395,6 +395,11 @@ const proofs = [
         )
         seen.observe(deck)
     }
+
+    // Pause the orbiting icons while the ring is off screen
+    for (const orbit of document.querySelectorAll<HTMLElement>("[data-orbit]")) {
+        new IntersectionObserver(([entry]) => orbit.toggleAttribute("data-seen", Boolean(entry?.isIntersecting)), { rootMargin: "200px 0px" }).observe(orbit)
+    }
 </script>
 
 <style>
@@ -550,11 +555,16 @@ const proofs = [
     }
 
     :global(html:not([data-still])) .orbit {
-        animation: nf-orbit 54s linear infinite;
+        animation: nf-orbit 54s linear infinite paused;
     }
 
     :global(html:not([data-still])) .orbit img {
-        animation: nf-orbit 54s linear infinite reverse;
+        animation: nf-orbit 54s linear infinite reverse paused;
+    }
+
+    :global(html:not([data-still])) .orbit[data-seen],
+    :global(html:not([data-still])) .orbit[data-seen] img {
+        animation-play-state: running;
     }
 
     /* Each message arrives in turn, whenever its channel is chosen */

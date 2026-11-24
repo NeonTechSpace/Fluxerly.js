@@ -7,14 +7,17 @@ import Maker from "../components/sections/Maker.astro"
 import AlreadyThere from "../components/sections/AlreadyThere.astro"
 import Grows from "../components/sections/Grows.astro"
 import Checked from "../components/sections/Checked.astro"
-import Questions from "../components/sections/Questions.astro"
+import Questions, { homeFaq } from "../components/sections/Questions.astro"
 import Tools from "../components/sections/Tools.astro"
 import Install from "../components/sections/Install.astro"
 import NeonFlux from "../components/sections/NeonFlux.astro"
-import { homeGraph } from "../lib/seo"
+import { faqGraph, homeGraph } from "../lib/seo"
+
+const faq = faqGraph(homeFaq)
+const graph = faq ? [...homeGraph, faq] : homeGraph
 ---
 
-<Site graph={homeGraph}>
+<Site graph={graph}>
     <Hero />
     <Night
         stops={[

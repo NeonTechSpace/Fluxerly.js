@@ -62,6 +62,17 @@ const backdropVertex = /* glsl */ `
     }
 `
 
+// Precomputes directional wave constants at build time so waterShader skips sin, cos, sqrt and division per wave
+const waveCall = (angle: number, wavelength: number, strength: number, phase: number) => {
+    const dirX = Math.sin(angle)
+    const dirY = Math.cos(angle)
+    const k = 6.2831853 / wavelength
+    const speed = Math.sqrt(20.5 * k)
+    const invLen = 1 / wavelength
+    const f = (value: number) => value.toFixed(7)
+    return `waveSlope(p, t, vec2(${f(dirX * k)}, ${f(dirY * k)}), vec2(${f(dirX * strength)}, ${f(dirY * strength)}), ${f(invLen)}, ${f(speed)}, ${phase.toFixed(1)}, footprint)`
+}
+
 // The far void and the horizon key light. Nothing here moves with the camera
 export const skyShader = {
     vertexShader: backdropVertex,
@@ -140,12 +151,6 @@ export const veilShader = {
             return clamp(dot(pixel - a, axis) / dot(axis, axis), 0.0, 1.0);
         }
 
-        // The ribbon's leading edge in hero fractions: low and flat at the left, climbing to the upper right
-        float ribbonEdge(float x, float t) {
-            float k = max(x, 0.0);
-            return 0.6 - 0.05 * x - 0.5 * pow(k, 2.4) + 0.014 * sin(t * 0.075 + x * 2.2) * x;
-        }
-
         // Color and opacity ramps of the ribbon along its length: faint where it leaves the horizon,
         // blue through the open sky beside the title, violet at the top right
         vec4 veilRamp(float g) {
@@ -172,77 +177,94 @@ export const veilShader = {
             vec2 p = art / uArtSize;
             vec3 color = vec3(0.0);
 
-            // Violet nebula upper right behind the conductor, kept quiet so the dome and ribbon read
-            float drift = uTime * 0.004;
-            float cloudA = fbm(vPixel / 260.0 + vec2(drift, 0.0));
-            float cloudB = fbm(vPixel / 90.0 - vec2(drift * 0.6, drift * 0.3));
-            float cloud = 0.2 + 1.4 * cloudA + 0.6 * (cloudB - 0.5);
-            float nebula = 0.5 * cssBlob(art, vec2(0.74, 0.30), vec2(0.36, 0.38), 0.76) * cloud;
-            nebula += 0.28 * cssBlob(art, vec2(0.86, 0.14), vec2(0.22, 0.2), 0.7) * cloud;
-            nebula += 0.12 * cssBlob(art, vec2(0.58, 0.48), vec2(0.2, 0.16), 0.7) * cloud;
-            vec3 violet = mix(vec3(0.647, 0.486, 1.0), vec3(0.36, 0.42, 0.95), clamp(cloudB, 0.0, 1.0));
-            color += violet * clamp(nebula, 0.0, 0.6) * 0.42;
-
-            // A faint blue haze lower left, so the title does not float in a void
-            float haze = 0.06 * cssBlob(art, vec2(0.2, 0.58), vec2(0.32, 0.3), 0.75) * (0.7 + 0.6 * cloudA);
-            color += vec3(0.24, 0.44, 0.8) * haze;
+            // Violet nebula upper right behind the conductor, and faint blue haze lower left.
+            // Cheap radial masks decide first so fragments outside both skip the four-octave noise
+            float nebulaMask = 0.5 * cssBlob(art, vec2(0.74, 0.30), vec2(0.36, 0.38), 0.76)
+                + 0.28 * cssBlob(art, vec2(0.86, 0.14), vec2(0.22, 0.2), 0.7)
+                + 0.12 * cssBlob(art, vec2(0.58, 0.48), vec2(0.2, 0.16), 0.7);
+            float hazeMask = 0.06 * cssBlob(art, vec2(0.2, 0.58), vec2(0.32, 0.3), 0.75);
+            if (nebulaMask > 0.0 || hazeMask > 0.0) {
+                float drift = uTime * 0.004;
+                float cloudA = fbm(vPixel / 260.0 + vec2(drift, 0.0));
+                if (nebulaMask > 0.0) {
+                    float cloudB = fbm(vPixel / 90.0 - vec2(drift * 0.6, drift * 0.3));
+                    float cloud = 0.2 + 1.4 * cloudA + 0.6 * (cloudB - 0.5);
+                    vec3 violet = mix(vec3(0.647, 0.486, 1.0), vec3(0.36, 0.42, 0.95), clamp(cloudB, 0.0, 1.0));
+                    color += violet * clamp(nebulaMask * cloud, 0.0, 0.6) * 0.42;
+                }
+                if (hazeMask > 0.0) {
+                    color += vec3(0.24, 0.44, 0.8) * (hazeMask * (0.7 + 0.6 * cloudA));
+                }
+            }
 
             // The ribbon: layered folds hanging from one leading edge, blue low and violet high,
             // with a cyan thread along the edge. Creases and ridges travel slowly along it
             float t = uTime;
             float scale = max(uSize.x / 1600.0, uSize.y / 1000.0);
-            float edge = ribbonEdge(p.x, t);
-            float rise = (ribbonEdge(p.x + 0.002, t) - ribbonEdge(p.x - 0.002, t)) / 0.004 * uArtSize.y / uArtSize.x;
+            // Leading edge and its analytical slope in hero fractions: low and flat at the left, climbing to the upper right
+            float k = max(p.x, 0.0);
+            float k14 = k > 0.0 ? pow(k, 1.4) : 0.0;
+            float wavePhase = t * 0.075 + p.x * 2.2;
+            float waveSin = sin(wavePhase);
+            float edge = 0.6 - 0.05 * p.x - 0.5 * k14 * k + 0.014 * waveSin * p.x;
+            float edgeSlope = -0.05 - 1.2 * k14 + 0.014 * (waveSin + 2.2 * p.x * cos(wavePhase));
+            float rise = edgeSlope * uArtSize.y / uArtSize.x;
             float across = (vPixel.y - edge * uArtSize.y) / sqrt(1.0 + rise * rise);
-            float u = clamp((p.x + 0.06) / 1.1, 0.0, 1.0);
-            float envelope = sin(u * 1.5707963);
-            float crease = (sin(u * 29.0 + t * 0.055) * 5.0 + sin(u * 73.0 - t * 0.035) * 2.2) * envelope * scale;
 
-            float g = along(art, vec2(0.05, 0.6), vec2(0.97, 0.02));
-            vec4 veilColor = veilRamp(g);
-            vec4 foldColor = foldRamp(g);
-            vec4 threadColor = threadRamp(g);
+            // Skip the fold and pulse loops outside the visible ribbon band
+            if (across > -80.0 * scale - 8.0 && across < 190.0 * scale + 8.0) {
+                float u = clamp((p.x + 0.06) / 1.1, 0.0, 1.0);
+                float envelope = sin(u * 1.5707963);
+                float crease = (sin(u * 29.0 + t * 0.055) * 5.0 + sin(u * 73.0 - t * 0.035) * 2.2) * envelope * scale;
 
-            float spreads[5];
-            spreads[0] = 150.0;
-            spreads[1] = 91.0;
-            spreads[2] = 53.0;
-            spreads[3] = 32.0;
-            spreads[4] = 18.0;
-            float soft = 1.8 * scale;
-            vec3 ribbon = vec3(0.0);
-            float threadA = 0.0;
-            float threadB = 0.0;
-            float leading = 0.0;
-            for (int i = 0; i < 5; i++) {
-                float fi = float(i);
-                float spread = spreads[i] * scale;
-                float ridge = sin(u * 11.0 + fi * 0.6 + t * 0.08) * spread * 0.16 * envelope;
-                float outer = crease + ridge;
-                float inner = outer + spread * envelope * (0.65 + 0.35 * pow(sin(u * 7.0 + fi * 0.45), 2.0));
-                float band = smoothstep(outer - soft, outer + soft, across) * (1.0 - smoothstep(inner - soft * 4.0, inner + soft, across));
-                vec4 tone = i < 2 ? veilColor * vec4(1.0, 1.0, 1.0, 0.28 - fi * 0.05) : foldColor * vec4(1.0, 1.0, 1.0, 0.55 - fi * 0.04);
-                ribbon += tone.rgb * tone.a * band;
-                if (i == 0) {
-                    threadA = exp(-pow((across - outer) / (1.4 * scale + 0.9), 2.0));
-                    leading = outer;
+                float g = along(art, vec2(0.05, 0.6), vec2(0.97, 0.02));
+                vec4 veilColor = veilRamp(g);
+                vec4 foldColor = foldRamp(g);
+                vec4 threadColor = threadRamp(g);
+
+                float spreads[5];
+                spreads[0] = 150.0;
+                spreads[1] = 91.0;
+                spreads[2] = 53.0;
+                spreads[3] = 32.0;
+                spreads[4] = 18.0;
+                float soft = 1.8 * scale;
+                vec3 ribbon = vec3(0.0);
+                float threadA = 0.0;
+                float threadB = 0.0;
+                float leading = 0.0;
+                for (int i = 0; i < 5; i++) {
+                    float fi = float(i);
+                    float spread = spreads[i] * scale;
+                    float ridge = sin(u * 11.0 + fi * 0.6 + t * 0.08) * spread * 0.16 * envelope;
+                    float outer = crease + ridge;
+                    float inner = outer + spread * envelope * (0.65 + 0.35 * pow(sin(u * 7.0 + fi * 0.45), 2.0));
+                    float band = smoothstep(outer - soft, outer + soft, across) * (1.0 - smoothstep(inner - soft * 4.0, inner + soft, across));
+                    vec4 tone = i < 2 ? veilColor * vec4(1.0, 1.0, 1.0, 0.28 - fi * 0.05) : foldColor * vec4(1.0, 1.0, 1.0, 0.55 - fi * 0.04);
+                    ribbon += tone.rgb * tone.a * band;
+                    if (i == 0) {
+                        threadA = exp(-pow((across - outer) / (1.4 * scale + 0.9), 2.0));
+                        leading = outer;
+                    }
+                    if (i == 3) threadB = exp(-pow((across - outer) / (0.6 * scale + 0.7), 2.0));
                 }
-                if (i == 3) threadB = exp(-pow((across - outer) / (0.6 * scale + 0.7), 2.0));
-            }
-            ribbon += threadColor.rgb * threadColor.a * (threadA * 0.9 + threadB * 0.45);
-            color += ribbon * 1.2;
+                ribbon += threadColor.rgb * threadColor.a * (threadA * 0.9 + threadB * 0.45);
+                color += ribbon * 1.2;
 
-            // Messages: a bright bead in a small round glow with a fading trail, running along the thread toward the conductor
-            float side = (across - leading) / scale;
-            float onThread = exp(-pow((across - leading) / (1.5 * scale + 0.8), 2.0));
-            float trail = 0.0;
-            float bead = 0.0;
-            for (int k = 0; k < 3; k++) {
-                float behind = (uPulseAlong[k] * uSize.x - vPixel.x) / scale;
-                trail += uPulseStrength[k] * (behind > 0.0 ? exp(-behind / 110.0) : 0.0);
-                bead += uPulseStrength[k] * (exp(-(behind * behind + side * side * 4.0) / 30.0) + 0.3 * exp(-(behind * behind + side * side) / 260.0));
+                // Messages: a bright bead in a small round glow with a fading trail, running along the thread toward the conductor
+                if (uPulseStrength.x + uPulseStrength.y + uPulseStrength.z > 0.0 && abs(across - leading) < 48.0 * scale + 8.0) {
+                    float side = (across - leading) / scale;
+                    float onThread = exp(-pow((across - leading) / (1.5 * scale + 0.8), 2.0));
+                    float trail = 0.0;
+                    float bead = 0.0;
+                    for (int pulse = 0; pulse < 3; pulse++) {
+                        float behind = (uPulseAlong[pulse] * uSize.x - vPixel.x) / scale;
+                        trail += uPulseStrength[pulse] * (behind > 0.0 ? exp(-behind / 110.0) : 0.0);
+                        bead += uPulseStrength[pulse] * (exp(-(behind * behind + side * side * 4.0) / 30.0) + 0.3 * exp(-(behind * behind + side * side) / 260.0));
+                    }
+                    color += vec3(0.5, 0.95, 1.0) * trail * onThread * 0.7 + vec3(0.72, 0.98, 1.0) * bead * 1.3;
+                }
             }
-            color += vec3(0.5, 0.95, 1.0) * trail * onThread * 0.7 + vec3(0.72, 0.98, 1.0) * bead * 1.3;
 
             gl_FragColor = vec4(dithered(color), 1.0);
         }
@@ -449,7 +471,6 @@ export const companionShader = {
 export const waterShader = {
     name: "FluxerlyWater",
     uniforms: {
-        color: { value: null },
         tDiffuse: { value: null },
         textureMatrix: { value: null },
         uTime: { value: 0 },
@@ -494,32 +515,28 @@ export const waterShader = {
         const vec3 cyan = vec3(0.275, 0.89, 0.937);
         const float keyX = 0.62;
 
-        // One directional wave's slope. Waves shorter than about two pixels fade out so the far water does not shimmer.
-        // wave: direction angle from the view axis, wavelength in world units, slope strength
-        vec2 waveSlope(vec2 p, float t, vec3 wave, float phase, float footprint) {
-            vec2 dir = vec2(sin(wave.x), cos(wave.x));
-            float k = 6.2831853 / wave.y;
-            float speed = sqrt(20.5 * k);
-            float fade = 1.0 - smoothstep(0.22, 0.5, footprint / wave.y);
-            return dir * wave.z * fade * cos(dot(dir, p) * k + t * speed + phase);
+        // One directional wave's slope. Waves shorter than about two pixels fade out so the far water does not shimmer
+        vec2 waveSlope(vec2 p, float t, vec2 dirK, vec2 dirAmp, float invLen, float speed, float phase, float footprint) {
+            float fade = 1.0 - smoothstep(0.22, 0.5, footprint * invLen);
+            return dirAmp * (fade * cos(dot(dirK, p) + t * speed + phase));
         }
 
         // Short ripples
         vec2 rippleSlope(vec2 p, float t, float footprint) {
-            vec2 slope = waveSlope(p, t, vec3(0.10, 11.0, 0.012), 0.0, footprint);
-            slope += waveSlope(p, t, vec3(-0.38, 17.0, 0.02), 1.7, footprint);
-            slope += waveSlope(p, t, vec3(0.52, 26.0, 0.030), 3.4, footprint);
-            slope += waveSlope(p, t, vec3(-0.21, 41.0, 0.034), 5.1, footprint);
-            slope += waveSlope(p, t, vec3(0.86, 67.0, 0.022), 6.8, footprint);
-            slope += waveSlope(p, t, vec3(-0.64, 103.0, 0.020), 8.5, footprint);
+            vec2 slope = ${waveCall(0.1, 11.0, 0.012, 0.0)};
+            slope += ${waveCall(-0.38, 17.0, 0.02, 1.7)};
+            slope += ${waveCall(0.52, 26.0, 0.03, 3.4)};
+            slope += ${waveCall(-0.21, 41.0, 0.034, 5.1)};
+            slope += ${waveCall(0.86, 67.0, 0.022, 6.8)};
+            slope += ${waveCall(-0.64, 103.0, 0.02, 8.5)};
             return slope;
         }
 
         // Long slow swells under the ripples
         vec2 swellSlope(vec2 p, float t, float footprint) {
-            vec2 slope = waveSlope(p, t, vec3(0.18, 340.0, 0.03), 0.4, footprint);
-            slope += waveSlope(p, t, vec3(-0.42, 560.0, 0.028), 2.1, footprint);
-            slope += waveSlope(p, t, vec3(0.75, 900.0, 0.02), 4.4, footprint);
+            vec2 slope = ${waveCall(0.18, 340.0, 0.03, 0.4)};
+            slope += ${waveCall(-0.42, 560.0, 0.028, 2.1)};
+            slope += ${waveCall(0.75, 900.0, 0.02, 4.4)};
             return slope;
         }
 
@@ -546,17 +563,14 @@ export const waterShader = {
                 ring = 2.33 * (x * exp(-x * x) + 0.5 * inner * exp(-inner * inner)) * uRing.w;
             }
 
-            // Reflection: projected lookup, nudged by ripples, swells and the ring, softened with a short vertical blur
+            // Reflection: projected lookup, nudged by ripples, swells and the ring, softened with a 5-tap bilinear Gaussian blur
             vec2 bend = ripple + swell * 0.6;
             vec2 uv = vUv.xy / vUv.w + vec2(bend.x * 0.04, bend.y * 0.075 + ring * 0.02);
-            vec3 reflection = vec3(0.0);
-            float total = 0.0;
-            for (int i = -4; i <= 4; i++) {
-                float w = exp(-float(i * i) / 8.0);
-                reflection += texture2D(tDiffuse, uv + vec2(0.0, float(i) * uTexel.y * 1.6)).rgb * w;
-                total += w;
-            }
-            reflection /= total;
+            vec2 step1 = vec2(0.0, uTexel.y * 2.251735);
+            vec2 step2 = vec2(0.0, uTexel.y * 5.270798);
+            vec3 reflection = texture2D(tDiffuse, uv).rgb * 0.204164
+                + (texture2D(tDiffuse, uv + step1).rgb + texture2D(tDiffuse, uv - step1).rgb) * 0.304005
+                + (texture2D(tDiffuse, uv + step2).rgb + texture2D(tDiffuse, uv - step2).rgb) * 0.093913;
 
             // Water mirrors more at grazing angles near the horizon, less when looking down.
             // Sinking toward the surface makes every angle more grazing
@@ -584,15 +598,19 @@ export const waterShader = {
             color += vec3(0.62, 0.95, 1.0) * glitter * column * exp(-depth / 0.45) * 0.6;
 
             // Sparse soft glints along the far water, each fading in and out on its own slow beat
-            vec2 cellSize = vec2(15.0, 2.6 + below * 0.06);
-            vec2 cell = vec2(pixel.x, below) / cellSize;
-            vec2 id = floor(cell);
-            vec2 f = fract(cell) - 0.5;
-            float seed = hash12(id + 17.0);
-            float beat = 0.5 + 0.5 * sin(uTime * (0.34 + seed * 0.6) + seed * 60.0);
-            float spot = exp(-(f.x * f.x * 14.0 + f.y * f.y * 10.0));
-            float sparkle = step(0.93, seed) * spot * beat * beat * beat * (1.0 - smoothstep(0.02, 0.16, depth)) * (0.3 + 0.7 * spread);
-            color += vec3(0.7, 0.96, 1.0) * sparkle * 0.5;
+            if (depth < 0.16) {
+                vec2 cellSize = vec2(15.0, 2.6 + below * 0.06);
+                vec2 cell = vec2(pixel.x, below) / cellSize;
+                vec2 id = floor(cell);
+                float seed = hash12(id + 17.0);
+                if (seed >= 0.93) {
+                    vec2 f = fract(cell) - 0.5;
+                    float beat = 0.5 + 0.5 * sin(uTime * (0.34 + seed * 0.6) + seed * 60.0);
+                    float spot = exp(-(f.x * f.x * 14.0 + f.y * f.y * 10.0));
+                    float sparkle = spot * beat * beat * beat * (1.0 - smoothstep(0.02, 0.16, depth)) * (0.3 + 0.7 * spread);
+                    color += vec3(0.7, 0.96, 1.0) * sparkle * 0.5;
+                }
+            }
 
             // The ring's crest catches the key light, its trough falls a little darker
             color += vec3(0.55, 0.93, 1.0) * max(ring, 0.0) * 0.42;

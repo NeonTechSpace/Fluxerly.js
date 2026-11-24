@@ -430,9 +430,15 @@ const place = (b: ArtBox) =>
     }
 
     /* Under the sky's canvas, which covers them as it fades in. They go when it is whole, which frees their layers */
-    :global(.hero[data-scene]) .sky-icons {
+    :global(.hero[data-scene]) .sky-icons,
+    :global(.hero[data-scene]) .backdrop {
         visibility: hidden;
         transition: visibility 0s linear 1.5s;
+    }
+
+    :global(html[data-still]) .hero[data-scene] .backdrop,
+    :global(html[data-still]) .hero[data-scene] .sky-icons {
+        transition: none;
     }
 
     .sky-icons img {

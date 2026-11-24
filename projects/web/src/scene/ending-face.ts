@@ -5,7 +5,7 @@
 
 import { faceArt, type FacePartName } from "../lib/art"
 import { heroFaceMoving, onHeroFace } from "./face-turn"
-import { faceShader } from "./face-shader"
+import { faceDustCount, faceShader, fillFaceDust } from "./face-shader"
 
 export interface EndingFace {
     readonly canvas: HTMLCanvasElement
@@ -56,6 +56,11 @@ export function createEndingFace(slot: HTMLElement, onLost: () => void, resting:
     const buffers: WebGLBuffer[] = []
     let uTime: WebGLUniformLocation | null = null
     let uWake: WebGLUniformLocation | null = null
+    let uDustPos: WebGLUniformLocation | null = null
+    let uDustMeta: WebGLUniformLocation | null = null
+    const dustPos = new Float32Array(faceDustCount * 2)
+    const dustMeta = new Float32Array(faceDustCount * 4)
+    fillFaceDust(0, dustPos, dustMeta)
 
     // Its own clock runs only while it draws, so it carries on where it stopped rather than jumping
     let sceneTime = 0
@@ -76,9 +81,15 @@ export function createEndingFace(slot: HTMLElement, onLost: () => void, resting:
     }
 
     const draw = () => {
+        const wake = smooth(0, wakeSeconds, sceneTime)
         gl.viewport(0, 0, canvas.width, canvas.height)
         gl.uniform1f(uTime, sceneTime)
-        gl.uniform1f(uWake, smooth(0, wakeSeconds, sceneTime))
+        gl.uniform1f(uWake, wake)
+        if (wake > 0) {
+            fillFaceDust(sceneTime, dustPos, dustMeta)
+            gl.uniform2fv(uDustPos, dustPos)
+            gl.uniform4fv(uDustMeta, dustMeta)
+        }
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
     }
 
@@ -90,9 +101,9 @@ export function createEndingFace(slot: HTMLElement, onLost: () => void, resting:
         frame = requestAnimationFrame(tick)
     }
 
-    // Moves while it is on screen and the hero's face is not moving. Held, it keeps its last frame
+    // Moves while it is on screen, the tab is visible, and the hero's face is not moving. Held, it keeps its last frame
     const follow = () => {
-        const moves = ready && !released && onScreen && !heroFaceMoving()
+        const moves = ready && !released && onScreen && !document.hidden && !heroFaceMoving()
         if (moves && !frame) {
             last = -1
             frame = requestAnimationFrame(tick)
@@ -102,6 +113,7 @@ export function createEndingFace(slot: HTMLElement, onLost: () => void, resting:
         }
     }
     const leaveTurn = onHeroFace(follow)
+    document.addEventListener("visibilitychange", follow)
     const viewObserver = new IntersectionObserver((entries) => {
         onScreen = Boolean(entries[entries.length - 1]?.isIntersecting)
         follow()
@@ -113,6 +125,7 @@ export function createEndingFace(slot: HTMLElement, onLost: () => void, resting:
         released = true
         follow()
         leaveTurn()
+        document.removeEventListener("visibilitychange", follow)
         viewObserver.disconnect()
         resizeObserver.disconnect()
         for (const texture of textures) gl.deleteTexture(texture)
@@ -165,9 +178,13 @@ export function createEndingFace(slot: HTMLElement, onLost: () => void, resting:
 
             uTime = gl.getUniformLocation(program, "uTime")
             uWake = gl.getUniformLocation(program, "uWake")
+            uDustPos = gl.getUniformLocation(program, "uDustPos")
+            uDustMeta = gl.getUniformLocation(program, "uDustMeta")
             gl.uniform1f(gl.getUniformLocation(program, "uGlow"), 0)
             gl.uniform2f(gl.getUniformLocation(program, "uView"), 0, 0)
             gl.uniform2f(gl.getUniformLocation(program, "uCharge"), 0, 0)
+            gl.uniform2fv(uDustPos, dustPos)
+            gl.uniform4fv(uDustMeta, dustMeta)
 
             // As the hero's face takes them: the top row first, color already multiplied by its alpha and no color conversion
             gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)

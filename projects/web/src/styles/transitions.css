@@ -3,24 +3,32 @@
 html[data-navigating]::after {
     content: "";
     position: fixed;
-    inset: 0 0 auto;
+    inset: 0 auto auto 0;
     z-index: 100;
+    width: 50%;
     height: 2px;
     pointer-events: none;
-    background: linear-gradient(90deg, transparent, rgb(70 227 239 / 0.2) 30%, var(--color-cyan-light) 46%, #fff 50%, rgb(70 227 239 / 0.2) 60%, transparent 80%) 0 0 / 50% 100% no-repeat;
+    background: linear-gradient(90deg, transparent, rgb(70 227 239 / 0.2) 30%, var(--color-cyan-light) 46%, #fff 50%, rgb(70 227 239 / 0.2) 60%, transparent 80%);
     box-shadow: 0 0 12px rgb(70 227 239 / 0.35);
+    will-change: transform;
     animation:
         fx-wait-in 240ms ease both,
         fx-wait-run 1300ms cubic-bezier(0.45, 0.05, 0.35, 1) infinite;
 }
 
 html[data-navigating="still"]::after {
+    width: 100%;
     background: linear-gradient(90deg, transparent, rgb(70 227 239 / 0.55) 20%, rgb(70 227 239 / 0.55) 80%, transparent);
+    transform: none;
+    will-change: auto;
     animation: fx-wait-in 240ms ease both;
 }
 
 html[data-navigating="held"]::after {
+    width: 100%;
     background: linear-gradient(90deg, transparent, rgb(70 227 239 / 0.55) 20%, rgb(70 227 239 / 0.55) 80%, transparent);
+    transform: none;
+    will-change: auto;
     animation: none;
 }
 
@@ -32,10 +40,10 @@ html[data-navigating="held"]::after {
 
 @keyframes fx-wait-run {
     from {
-        background-position: -100% 0;
+        transform: translateX(-100%);
     }
 
     to {
-        background-position: 200% 0;
+        transform: translateX(200%);
     }
 }

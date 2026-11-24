@@ -15,6 +15,72 @@ const facePartRect = (name: keyof typeof faceArt.parts) => {
     return `vec4(${left}.0, ${top}.0, ${width}.0, ${height}.0)`
 }
 
+export const faceDustCount = 26
+
+const tau = Math.PI * 2
+const holeX = 1050
+const holeY = 1466.5
+const horizon = 82
+const diskCenterX = 1062
+const diskCenterY = 1473
+const diskTilt = 0.14
+const diskFlat = 0.33
+const diskCos = Math.cos(diskTilt)
+const diskSin = Math.sin(diskTilt)
+const invDiskCos = Math.cos(-diskTilt)
+const invDiskSin = Math.sin(-diskTilt)
+
+const fract = (x: number) => x - Math.floor(x)
+const hash = (n: number) => fract(Math.sin(n * 12.9898) * 43758.5453)
+const smoothstep = (edge0: number, edge1: number, x: number) => {
+    const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)))
+    return t * t * (3 - 2 * t)
+}
+
+const dustSpecs = Array.from({ length: faceDustCount }, (_, index) => {
+    const seed = hash(index + 1)
+    const speed = 0.05 + 0.055 * hash(index + 17)
+    const sizeScale = 0.75 + 0.5 * hash(index + 31)
+    const violet = hash(index + 5) >= 0.55
+    return {
+        seed,
+        speed,
+        sizeScale,
+        r: violet ? 0.86 : 0.36,
+        g: violet ? 0.8 : 0.92,
+        b: 1.0,
+    }
+})
+
+// Precomputes the 26 spiraling dust specks once per frame on the CPU so the fragment shader runs no trig, hash or sqrt per speck
+export function fillFaceDust(time: number, pos: Float32Array, meta: Float32Array) {
+    for (let i = 0; i < faceDustCount; i++) {
+        const spec = dustSpecs[i]!
+        const along = fract(time * spec.speed + spec.seed * 7)
+        const closing = along * along
+        const reach = 258 + (86 - 258) * closing
+        const angle = spec.seed * tau - closing * 7.4
+        const flatX = Math.cos(angle) * reach
+        const flatY = Math.sin(angle) * reach
+        const scaledY = flatY * diskFlat
+        // Matches GLSL turn(diskTilt) * vec2(flatX, scaledY) + diskCenter, where mat2 is column-major
+        const spotX = diskCos * flatX + diskSin * scaledY + diskCenterX
+        const spotY = -diskSin * flatX + diskCos * scaledY + diskCenterY
+        const behind = flatY <= 0 && Math.hypot(spotX - holeX, spotY - holeY) <= horizon
+        const life = smoothstep(0, 0.12, along) * smoothstep(1, 0.92, along)
+        const weight = behind ? 0 : life
+        const size = (3.6 + (1.8 - 3.6) * closing) * spec.sizeScale
+        const p = i * 2
+        pos[p] = spotX
+        pos[p + 1] = spotY
+        const m = i * 4
+        meta[m] = spec.r * weight
+        meta[m + 1] = spec.g * weight
+        meta[m + 2] = spec.b * weight
+        meta[m + 3] = weight > 0 ? size : 0
+    }
+}
+
 export const faceShader = {
     vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -28,9 +94,16 @@ export const faceShader = {
         uniform sampler2D uFar, uMist, uLens, uFlow, uViolet, uEyes, uBrows, uWaves, uWavesLight, uCrescents, uSheen, uGlass;
         uniform float uTime, uWake, uGlow;
         uniform vec4 uEye[2];
+        // xy: offset in canvas pixels, zw: precomputed cos(-turn), sin(-turn)
         uniform vec4 uBrow[2];
         uniform vec4 uCheek[2];
         uniform vec2 uGaze, uView, uCharge;
+        #ifndef HOLE_ONLY
+        uniform vec2 uMistTurn;
+        #endif
+        uniform vec2 uDustPos[${faceDustCount}];
+        // rgb: speck color multiplied by life and visibility, w: speck radius (0 when hidden)
+        uniform vec4 uDustMeta[${faceDustCount}];
         varying vec2 vUv;
 
         const vec4 glassBox = ${facePartRect("glass")};
@@ -47,8 +120,8 @@ export const faceShader = {
         const vec2 hole = vec2(1050.0, 1466.5);
         const float horizon = 82.0;
         const vec2 diskCenter = vec2(1062.0, 1473.0);
-        const float diskTilt = 0.14;
         const float diskFlat = 0.33;
+        const mat2 diskInvTurn = mat2(${invDiskCos.toFixed(8)}, ${(-invDiskSin).toFixed(8)}, ${invDiskSin.toFixed(8)}, ${invDiskCos.toFixed(8)});
         // Where the face's parts hinge: each eye's middle, each brow's, each crescent's. Between the strokes of the waves
         const vec2 eyeCenter0 = vec2(761.5, 1080.5);
         const vec2 eyeCenter1 = vec2(1268.5, 1056.5);
@@ -59,6 +132,8 @@ export const faceShader = {
         const float faceSplit = 1014.0;
         const float cheekSplit = 1024.0;
         const float wavesSplit = 1197.0;
+        // Padding around part bounds in canvas pixels so quad derivatives stay intact along box edges
+        const float boxPad = 6.0;
 
         const vec3 cyan = vec3(0.36, 0.92, 1.0);
         const vec3 violet = vec3(0.62, 0.42, 1.0);
@@ -71,6 +146,15 @@ export const faceShader = {
         mat2 turn(float a) {
             float c = cos(a), s = sin(a);
             return mat2(c, -s, s, c);
+        }
+
+        mat2 turnCS(vec2 cs) {
+            return mat2(cs.x, -cs.y, cs.y, cs.x);
+        }
+
+        bool inBox(vec4 box, vec2 at) {
+            vec2 d = at - box.xy;
+            return d.x >= -boxPad && d.y >= -boxPad && d.x <= box.z + boxPad && d.y <= box.w + boxPad;
         }
 
         // A part at a point of the canvas, with nothing outside its box
@@ -93,6 +177,12 @@ export const faceShader = {
         }
 
         void main() {
+            float glass = texture2D(uGlass, vUv, 0.0).a;
+            if (glass <= 0.0) {
+                gl_FragColor = vec4(0.0);
+                return;
+            }
+
             vec2 p = glassBox.xy + vUv * glassBox.zw;
             float wake = uWake;
             float t = uTime;
@@ -108,38 +198,48 @@ export const faceShader = {
             // Space falls in. What lies near the hole streams toward it and winds around it, seen as two copies a half cycle
             // apart, each fading out before it would have come too far. Lens: only the part close by, and none at rest
             float pull = smoothstep(330.0, 95.0, radius) * wake;
-            float stream = t / 7.0;
-            float cycleA = fract(stream);
-            float cycleB = fract(stream + 0.5);
-            float weightA = 1.0 - abs(2.0 * cycleA - 1.0);
-            vec2 fall = outward * 74.0 * pull;
-            float wind = 0.95 * pull;
-            vec2 farA = hole + turn((cycleA - 0.5) * wind) * (fromHole + fall * (cycleA - 0.5));
-            vec2 farB = hole + turn((cycleB - 0.5) * wind) * (fromHole + fall * (cycleB - 0.5));
-            // A still bend on top of that, as light passing a mass: the sky beside the horizon comes from further out
-            vec2 bend = outward * pull * 2600.0 / max(radius, horizon);
             vec2 window = view * vec2(-13.0, -9.0);
-            vec4 far = mix(part(uFar, farBox, farB + bend + window, -0.25), part(uFar, farBox, farA + bend + window, -0.25), weightA);
+            vec2 bend = vec2(0.0);
+            vec4 far;
+            if (pull > 0.0) {
+                float stream = t / 7.0;
+                float cycleA = fract(stream);
+                float cycleB = fract(stream + 0.5);
+                float weightA = 1.0 - abs(2.0 * cycleA - 1.0);
+                vec2 fall = outward * 74.0 * pull;
+                float wind = 0.95 * pull;
+                vec2 farA = hole + turn((cycleA - 0.5) * wind) * (fromHole + fall * (cycleA - 0.5));
+                vec2 farB = hole + turn((cycleB - 0.5) * wind) * (fromHole + fall * (cycleB - 0.5));
+                // A still bend on top of that, as light passing a mass: the sky beside the horizon comes from further out
+                bend = outward * pull * 2600.0 / max(radius, horizon);
+                far = mix(part(uFar, farBox, farB + bend + window, -0.25), part(uFar, farBox, farA + bend + window, -0.25), weightA);
+            } else {
+                far = part(uFar, farBox, p + window, -0.25);
+            }
 
             // Stars breathe: what stands out from its surroundings gets brighter and dimmer on its own beat
             #ifndef HOLE_ONLY
-            vec3 surroundings = part(uFar, farBox, p + bend + window, 3.5).rgb;
-            float standout = smoothstep(0.08, 0.34, max(max(far.r, far.g), far.b) - max(max(surroundings.r, surroundings.g), surroundings.b));
-            vec2 starCell = floor(p / 40.0);
-            float starSeed = hash(starCell.x * 7.0 + starCell.y * 113.0);
-            far.rgb = mix(far.rgb, far.rgb * (0.82 + 0.5 * sin(t * (0.8 + 1.8 * starSeed) + starSeed * tau)), standout * wake);
+            if (wake > 0.0) {
+                vec3 surroundings = part(uFar, farBox, p + bend + window, 3.5).rgb;
+                float standout = smoothstep(0.08, 0.34, max(max(far.r, far.g), far.b) - max(max(surroundings.r, surroundings.g), surroundings.b));
+                vec2 starCell = floor(p / 40.0);
+                float starSeed = hash(starCell.x * 7.0 + starCell.y * 113.0);
+                far.rgb = mix(far.rgb, far.rgb * (0.82 + 0.5 * sin(t * (0.8 + 1.8 * starSeed) + starSeed * tau)), standout * wake);
+            }
             #endif
             vec4 color = far;
 
             // The galaxy's soft light turns slowly around the middle of the glass, bending as far space does
             #ifndef HOLE_ONLY
-            vec2 mistAt = (p + bend * 0.6 + view * vec2(-7.0, -5.0)) - (mistBox.xy + mistBox.zw * 0.5);
-            vec4 mist = part(uMist, mistBox, turn(t * tau / 90.0) * mistAt + mistBox.xy + mistBox.zw * 0.5, 0.0);
-            color = over(color, mist * 0.5 * wake);
+            if (wake > 0.0) {
+                vec2 mistAt = (p + bend * 0.6 + view * vec2(-7.0, -5.0)) - (mistBox.xy + mistBox.zw * 0.5);
+                vec4 mist = part(uMist, mistBox, turnCS(uMistTurn) * mistAt + mistBox.xy + mistBox.zw * 0.5, 0.0);
+                color = over(color, mist * 0.5 * wake);
+            }
             #endif
 
             // The disk's plane: flat coordinates around its center
-            vec2 flat2 = turn(-diskTilt) * (p - diskCenter);
+            vec2 flat2 = diskInvTurn * (p - diskCenter);
             flat2.y /= diskFlat;
             float diskRadius = length(flat2);
             float diskAngle = atan(flat2.y, flat2.x);
@@ -163,7 +263,10 @@ export const faceShader = {
             vec2 tailAt = p;
             float tailRight = smoothstep(150.0, 400.0, fromHole.x);
             tailAt.y += tailRight * (6.0 * sin(fromHole.x * 0.021 + t * 1.5) + 2.4 * sin(fromHole.x * 0.05 + t * 2.4)) * wake;
-            color = over(color, part(uLens, holeBox, tailAt, -0.25));
+            bool inTailBox = inBox(holeBox, tailAt);
+            if (inTailBox) {
+                color = over(color, part(uLens, holeBox, tailAt, -0.25));
+            }
 
             // Inside the horizon: the last light winds down into the middle and never comes out
             if (radius < horizon) {
@@ -186,13 +289,15 @@ export const faceShader = {
             vec2 flowAt = p;
             float tailLeft = smoothstep(120.0, 400.0, -fromHole.x);
             flowAt.y += tailLeft * (9.0 * sin(fromHole.x * 0.017 + t * 1.25) + 3.2 * sin(fromHole.x * 0.043 + t * 2.1)) * wake;
-            vec4 flow = part(uFlow, holeBox, flowAt, -0.25);
-            // Round the hole it winds with the disk. Out on the arm it runs along the arm toward the hole, in long soft swells
-            float armFlow = 0.5 + 0.5 * sin(fromHole.x * 0.021 - t * 2.1 + 1.8 * sin(fromHole.y * 0.024 + t * 0.47));
-            float through = mix(hotFlow, armFlow * armFlow, tailLeft);
-            flow.rgb *= 1.0 + (0.72 * through - 0.2) * wake;
-            flow.rgb += flow.a * vec3(0.5, 0.9, 1.0) * pow(through, 3.0) * 0.32 * wake;
-            color = over(color, flow);
+            if (inBox(holeBox, flowAt)) {
+                vec4 flow = part(uFlow, holeBox, flowAt, -0.25);
+                // Round the hole it winds with the disk. Out on the arm it runs along the arm toward the hole, in long soft swells
+                float armFlow = 0.5 + 0.5 * sin(fromHole.x * 0.021 - t * 2.1 + 1.8 * sin(fromHole.y * 0.024 + t * 0.47));
+                float through = mix(hotFlow, armFlow * armFlow, tailLeft);
+                flow.rgb *= 1.0 + (0.72 * through - 0.2) * wake;
+                flow.rgb += flow.a * vec3(0.5, 0.9, 1.0) * pow(through, 3.0) * 0.32 * wake;
+                color = over(color, flow);
+            }
 
             // The near side of the disk, coming round from behind the void and crossing in front of its lower part
             float nearSide = smoothstep(-14.0, 30.0, flat2.y);
@@ -200,29 +305,25 @@ export const faceShader = {
             color.rgb += hotColor * nearSide * nearBand * hotFlow * hotFlow * 0.8 * wake;
 
             // The near violet arm, its light running in toward the hole
-            vec4 near = part(uViolet, holeBox, tailAt, -0.25);
-            float violetFlow = 0.5 + 0.5 * sin(fromHole.x * 0.034 + t * 3.1 + 2.0 * sin(fromHole.y * 0.05 + t * 0.6));
-            near.rgb *= 1.0 + (0.42 * violetFlow - 0.12) * wake;
-            near.rgb += near.a * vec3(0.8, 0.66, 1.0) * pow(violetFlow, 4.0) * 0.2 * wake;
-            color = over(color, near);
+            if (inTailBox) {
+                vec4 near = part(uViolet, holeBox, tailAt, -0.25);
+                float violetFlow = 0.5 + 0.5 * sin(fromHole.x * 0.034 + t * 3.1 + 2.0 * sin(fromHole.y * 0.05 + t * 0.6));
+                near.rgb *= 1.0 + (0.42 * violetFlow - 0.12) * wake;
+                near.rgb += near.a * vec3(0.8, 0.66, 1.0) * pow(violetFlow, 4.0) * 0.2 * wake;
+                color = over(color, near);
+            }
 
             // Dust spiraling down, each speck faster as it nears the horizon. It goes out there, or passes behind the void
             if (wake > 0.0 && abs(flat2.x) < 290.0 && abs(flat2.y) < 290.0) {
                 vec3 dust = vec3(0.0);
-                for (int i = 0; i < 26; i++) {
-                    float k = float(i);
-                    float seed = hash(k + 1.0);
-                    float along = fract(t * (0.05 + 0.055 * hash(k + 17.0)) + seed * 7.0);
-                    float closing = along * along;
-                    float reach = mix(258.0, 86.0, closing);
-                    float angle = seed * tau - closing * 7.4;
-                    vec2 flatSpot = vec2(cos(angle), sin(angle)) * reach;
-                    vec2 spot = turn(diskTilt) * vec2(flatSpot.x, flatSpot.y * diskFlat) + diskCenter;
-                    float behind = step(flatSpot.y, 0.0) * step(length(spot - hole), horizon);
-                    float size = mix(3.6, 1.8, closing) * (0.75 + 0.5 * hash(k + 31.0));
-                    float speck = smoothstep(size, size * 0.2, length(p - spot));
-                    float life = smoothstep(0.0, 0.12, along) * smoothstep(1.0, 0.92, along);
-                    dust += mix(cyan, vec3(0.86, 0.8, 1.0), step(0.55, hash(k + 5.0))) * speck * life * (1.0 - behind);
+                for (int i = 0; i < ${faceDustCount}; i++) {
+                    vec4 meta = uDustMeta[i];
+                    if (meta.w <= 0.0) continue;
+                    vec2 delta = p - uDustPos[i];
+                    float dist2 = dot(delta, delta);
+                    if (dist2 < meta.w * meta.w) {
+                        dust += meta.rgb * smoothstep(meta.w, meta.w * 0.2, sqrt(dist2));
+                    }
                 }
                 color.rgb += dust * 1.35 * wake;
             }
@@ -230,56 +331,73 @@ export const faceShader = {
             #ifndef HOLE_ONLY
             // The eyes: each moves, widens and closes around its own middle, with a soft light in it that follows the look
             vec2 eyeAt0 = eyeCenter0 + (p - eyeCenter0 - uEye[0].xy) / uEye[0].zw;
+            if (inBox(eyesBox, eyeAt0) && eyeAt0.x <= faceSplit + boxPad) {
+                vec4 eye0 = part(uEyes, eyesBox, eyeAt0, -0.25) * step(eyeAt0.x, faceSplit);
+                vec2 glint0 = eyeCenter0 + vec2(-24.0, -34.0) + uGaze * vec2(26.0, 20.0);
+                eye0.rgb += eye0.a * smoothstep(40.0, 6.0, length(eyeAt0 - glint0)) * 0.2 * wake;
+                color = over(color, eye0);
+            }
             vec2 eyeAt1 = eyeCenter1 + (p - eyeCenter1 - uEye[1].xy) / uEye[1].zw;
-            vec4 eye0 = part(uEyes, eyesBox, eyeAt0, -0.25) * step(eyeAt0.x, faceSplit);
-            vec4 eye1 = part(uEyes, eyesBox, eyeAt1, -0.25) * step(faceSplit, eyeAt1.x);
-            vec2 glint0 = eyeCenter0 + vec2(-24.0, -34.0) + uGaze * vec2(26.0, 20.0);
-            vec2 glint1 = eyeCenter1 + vec2(-24.0, -34.0) + uGaze * vec2(26.0, 20.0);
-            eye0.rgb += eye0.a * smoothstep(40.0, 6.0, length(eyeAt0 - glint0)) * 0.2 * wake;
-            eye1.rgb += eye1.a * smoothstep(40.0, 6.0, length(eyeAt1 - glint1)) * 0.2 * wake;
-            color = over(over(color, eye0), eye1);
+            if (inBox(eyesBox, eyeAt1) && eyeAt1.x >= faceSplit - boxPad) {
+                vec4 eye1 = part(uEyes, eyesBox, eyeAt1, -0.25) * step(faceSplit, eyeAt1.x);
+                vec2 glint1 = eyeCenter1 + vec2(-24.0, -34.0) + uGaze * vec2(26.0, 20.0);
+                eye1.rgb += eye1.a * smoothstep(40.0, 6.0, length(eyeAt1 - glint1)) * 0.2 * wake;
+                color = over(color, eye1);
+            }
 
             // The brows are clouds: they lift and tip on their own, and their edges drift as cloud does
             vec2 cloudWobble = vec2(1.6 * sin(p.y * 0.09 + t * 0.8), 2.3 * sin(p.x * 0.05 + t * 1.05)) * wake;
-            vec2 browAt0 = browCenter0 + turn(-uBrow[0].z) * (p - browCenter0 - uBrow[0].xy) + cloudWobble;
-            vec2 browAt1 = browCenter1 + turn(-uBrow[1].z) * (p - browCenter1 - uBrow[1].xy) + cloudWobble;
-            color = over(color, part(uBrows, browsBox, browAt0, -0.25) * step(browAt0.x, faceSplit));
-            color = over(color, part(uBrows, browsBox, browAt1, -0.25) * step(faceSplit, browAt1.x));
+            vec2 browAt0 = browCenter0 + turnCS(uBrow[0].zw) * (p - browCenter0 - uBrow[0].xy) + cloudWobble;
+            if (inBox(browsBox, browAt0) && browAt0.x <= faceSplit + boxPad) {
+                color = over(color, part(uBrows, browsBox, browAt0, -0.25) * step(browAt0.x, faceSplit));
+            }
+            vec2 browAt1 = browCenter1 + turnCS(uBrow[1].zw) * (p - browCenter1 - uBrow[1].xy) + cloudWobble;
+            if (inBox(browsBox, browAt1) && browAt1.x >= faceSplit - boxPad) {
+                color = over(color, part(uBrows, browsBox, browAt1, -0.25) * step(faceSplit, browAt1.x));
+            }
 
             // The waves keep their painted shape. They are the conductor's charge: light fills each stroke from left to right, as a
             // battery fills, stays a moment and sinks back. It only ever brightens what is painted, its pale ribbons the most, and
             // the lower stroke fills a beat behind. While it fills, its front glows brighter still, so the light is seen to travel
-            vec4 stroke1 = part(uWaves, wavesBox, p, -0.25) * step(wavesSplit, p.y);
-            vec4 stroke0 = part(uWaves, wavesBox, p, -0.25) * step(p.y, wavesSplit);
-            float along = (p.x - 878.0) / 270.0;
-            float front0 = along - (uCharge.x * 1.5 - 0.25);
-            float front1 = along - ((uCharge.x - 0.06) * 1.5 - 0.25);
-            float filled0 = smoothstep(0.14, -0.14, front0);
-            float filled1 = smoothstep(0.14, -0.14, front1);
-            float running = 1.0 - smoothstep(0.8, 1.0, uCharge.x);
-            float edge0 = exp(-front0 * front0 / 0.012) * running;
-            float edge1 = exp(-front1 * front1 / 0.012) * running;
-            stroke0.rgb *= 1.0 + filled0 * uCharge.y * (0.85 + 1.2 * smoothstep(0.5, 0.92, stroke0.r / max(stroke0.a, 0.01)));
-            stroke1.rgb *= 1.0 + filled1 * uCharge.y * (0.85 + 1.2 * smoothstep(0.5, 0.92, stroke1.r / max(stroke1.a, 0.01)));
-            stroke0.rgb += vec3(0.55, 0.93, 1.0) * stroke0.a * edge0 * uCharge.y * 0.45;
-            stroke1.rgb += vec3(0.55, 0.93, 1.0) * stroke1.a * edge1 * uCharge.y * 0.45;
-            // Their soft light, which breathes, answers the pointer and rises with the charge: the strokes' own shape a little out of
-            // focus, so it glows along each line and never fills the space between them. Baked smooth, and ending in an oval well before the
-            // edge of its picture. The strokes cover most of it, so the charge lights the strokes themselves the most
-            float waveLight = part(uWavesLight, wavesBox, p, 0.0).a * smoothstep(1.0, 0.55, length((p - vec2(1013.0, 1198.0)) / vec2(180.0, 155.0)));
-            color.rgb += cyan * waveLight * (uGlow * 0.65 + (0.07 + 0.04 * sin(t * 0.85)) * wake + (filled0 * 0.9 + edge0 * 0.45) * uCharge.y);
-            color = over(over(color, stroke1), stroke0);
+            if (inBox(wavesBox, p)) {
+                vec4 wavesSample = part(uWaves, wavesBox, p, -0.25);
+                vec4 stroke1 = wavesSample * step(wavesSplit, p.y);
+                vec4 stroke0 = wavesSample * step(p.y, wavesSplit);
+                float along = (p.x - 878.0) / 270.0;
+                float front0 = along - (uCharge.x * 1.5 - 0.25);
+                float front1 = along - ((uCharge.x - 0.06) * 1.5 - 0.25);
+                float filled0 = smoothstep(0.14, -0.14, front0);
+                float filled1 = smoothstep(0.14, -0.14, front1);
+                float running = 1.0 - smoothstep(0.8, 1.0, uCharge.x);
+                float edge0 = exp(-front0 * front0 / 0.012) * running;
+                float edge1 = exp(-front1 * front1 / 0.012) * running;
+                stroke0.rgb *= 1.0 + filled0 * uCharge.y * (0.85 + 1.2 * smoothstep(0.5, 0.92, stroke0.r / max(stroke0.a, 0.01)));
+                stroke1.rgb *= 1.0 + filled1 * uCharge.y * (0.85 + 1.2 * smoothstep(0.5, 0.92, stroke1.r / max(stroke1.a, 0.01)));
+                stroke0.rgb += vec3(0.55, 0.93, 1.0) * stroke0.a * edge0 * uCharge.y * 0.45;
+                stroke1.rgb += vec3(0.55, 0.93, 1.0) * stroke1.a * edge1 * uCharge.y * 0.45;
+                // Their soft light, which breathes, answers the pointer and rises with the charge: the strokes' own shape a little out of
+                // focus, so it glows along each line and never fills the space between them. Baked smooth, and ending in an oval well before the
+                // edge of its picture. The strokes cover most of it, so the charge lights the strokes themselves the most
+                float waveLight = part(uWavesLight, wavesBox, p, 0.0).a * smoothstep(1.0, 0.55, length((p - vec2(1013.0, 1198.0)) / vec2(180.0, 155.0)));
+                color.rgb += cyan * waveLight * (uGlow * 0.65 + (0.07 + 0.04 * sin(t * 0.85)) * wake + (filled0 * 0.9 + edge0 * 0.45) * uCharge.y);
+                color = over(over(color, stroke1), stroke0);
+            }
 
             // The crescents float and rock as small moons, each on its own, and a glint crosses their facets now and then
-            vec2 cheekAt0 = cheekCenter0 + turn(-uCheek[0].z) * (p - cheekCenter0 - uCheek[0].xy);
-            vec2 cheekAt1 = cheekCenter1 + turn(-uCheek[1].z) * (p - cheekCenter1 - uCheek[1].xy);
-            vec4 cheek0 = part(uCrescents, crescentsBox, cheekAt0, -0.25) * step(cheekAt0.x, cheekSplit);
-            vec4 cheek1 = part(uCrescents, crescentsBox, cheekAt1, -0.25) * step(cheekSplit, cheekAt1.x);
-            float cross0 = (dot(cheekAt0 - cheekCenter0, vec2(0.7, 0.7)) / 56.0) - (fract(t / 6.5) * 9.0 - 3.0);
-            float cross1 = (dot(cheekAt1 - cheekCenter1, vec2(-0.7, 0.7)) / 56.0) - (fract(t / 8.1 + 0.4) * 9.0 - 3.0);
-            cheek0.rgb *= 1.0 + exp(-cross0 * cross0 * 5.0) * 0.8 * wake;
-            cheek1.rgb *= 1.0 + exp(-cross1 * cross1 * 5.0) * 0.8 * wake;
-            color = over(over(color, cheek0), cheek1);
+            vec2 cheekAt0 = cheekCenter0 + turnCS(uCheek[0].zw) * (p - cheekCenter0 - uCheek[0].xy);
+            if (inBox(crescentsBox, cheekAt0) && cheekAt0.x <= cheekSplit + boxPad) {
+                vec4 cheek0 = part(uCrescents, crescentsBox, cheekAt0, -0.25) * step(cheekAt0.x, cheekSplit);
+                float cross0 = (dot(cheekAt0 - cheekCenter0, vec2(0.7, 0.7)) / 56.0) - (fract(t / 6.5) * 9.0 - 3.0);
+                cheek0.rgb *= 1.0 + exp(-cross0 * cross0 * 5.0) * 0.8 * wake;
+                color = over(color, cheek0);
+            }
+            vec2 cheekAt1 = cheekCenter1 + turnCS(uCheek[1].zw) * (p - cheekCenter1 - uCheek[1].xy);
+            if (inBox(crescentsBox, cheekAt1) && cheekAt1.x >= cheekSplit - boxPad) {
+                vec4 cheek1 = part(uCrescents, crescentsBox, cheekAt1, -0.25) * step(cheekSplit, cheekAt1.x);
+                float cross1 = (dot(cheekAt1 - cheekCenter1, vec2(-0.7, 0.7)) / 56.0) - (fract(t / 8.1 + 0.4) * 9.0 - 3.0);
+                cheek1.rgb *= 1.0 + exp(-cross1 * cross1 * 5.0) * 0.8 * wake;
+                color = over(color, cheek1);
+            }
             #endif
 
             // The light on the glass stays on the glass, moving against everything behind it. Screen, as in the PSD
@@ -291,7 +409,6 @@ export const faceShader = {
             #endif
             color.rgb += sheen.rgb * (1.0 - color.rgb);
 
-            float glass = part(uGlass, glassBox, p, 0.0).a;
             gl_FragColor = color * glass;
         }
     `,

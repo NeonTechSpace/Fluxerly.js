@@ -5,10 +5,11 @@
 import { LinearFilter, LinearMipmapLinearFilter, Mesh, NoBlending, OrthographicCamera, PlaneGeometry, Scene, ShaderMaterial, Texture, TextureLoader, Vector2, Vector4, WebGLRenderer } from "three"
 import { faceArt, type FacePartName } from "../lib/art"
 import type { FaceState } from "./face-life"
-import { faceShader } from "./face-shader"
+import { faceDustCount, faceShader, fillFaceDust } from "./face-shader"
 
 // The picture's sharpest size: past this a phone's screen spends its memory on detail nobody can see
 const maxPixelRatio = 2
+const mistSpeed = (Math.PI * 2) / 90
 
 export interface FaceFrame {
     time: number
@@ -59,17 +60,33 @@ export function createFace(slot: HTMLElement): Face | null {
 
     const scene = new Scene()
     const camera = new OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0, 1)
-    const pair = () => [new Vector4(0, 0, 1, 1), new Vector4(0, 0, 1, 1)]
+    const eyeUniforms = [new Vector4(0, 0, 1, 1), new Vector4(0, 0, 1, 1)]
+    const browUniforms = [new Vector4(0, 0, 1, 0), new Vector4(0, 0, 1, 0)]
+    const cheekUniforms = [new Vector4(0, 0, 1, 0), new Vector4(0, 0, 1, 0)]
+    const gazeUniform = new Vector2()
+    const chargeUniform = new Vector2()
+    const viewUniform = new Vector2()
+    const mistTurnUniform = new Vector2(1, 0)
+    const dustPos = new Float32Array(faceDustCount * 2)
+    const dustMeta = new Float32Array(faceDustCount * 4)
+    fillFaceDust(0, dustPos, dustMeta)
+
+    const timeUniform = { value: 0 }
+    const wakeUniform = { value: 0 }
+    const glowUniform = { value: 0 }
     const uniforms: Record<string, { value: unknown }> = {
-        uTime: { value: 0 },
-        uWake: { value: 0 },
-        uEye: { value: pair() },
-        uBrow: { value: pair() },
-        uCheek: { value: pair() },
-        uGaze: { value: new Vector2() },
-        uCharge: { value: new Vector2() },
-        uGlow: { value: 0 },
-        uView: { value: new Vector2() },
+        uTime: timeUniform,
+        uWake: wakeUniform,
+        uEye: { value: eyeUniforms },
+        uBrow: { value: browUniforms },
+        uCheek: { value: cheekUniforms },
+        uGaze: { value: gazeUniform },
+        uCharge: { value: chargeUniform },
+        uGlow: glowUniform,
+        uView: { value: viewUniform },
+        uMistTurn: { value: mistTurnUniform },
+        uDustPos: { value: dustPos },
+        uDustMeta: { value: dustMeta },
     }
     for (const name of Object.values(uniformOf)) uniforms[name] = { value: null }
     const material = new ShaderMaterial({ ...faceShader, uniforms, blending: NoBlending, depthTest: false, depthWrite: false })
@@ -122,20 +139,31 @@ export function createFace(slot: HTMLElement): Face | null {
                 if (released) throw new Error("released")
             }
         },
-        render({ time, wake, state, glow, charge, chargeLevel, viewX, viewY }) {
-            uniforms.uTime!.value = time
-            uniforms.uWake!.value = wake
-            const set = (name: string, values: FaceState["eyes"], scaled: boolean) => {
-                const out = uniforms[name]!.value as Vector4[]
-                values.forEach((part, index) => (scaled ? out[index]!.set(part.x, part.y, part.scaleX, part.scaleY) : out[index]!.set(part.x, part.y, part.turn, 0)))
+        render(frame) {
+            const { time, wake, state, glow, charge, chargeLevel, viewX, viewY } = frame
+            timeUniform.value = time
+            wakeUniform.value = wake
+            const eye0 = state.eyes[0]
+            const eye1 = state.eyes[1]
+            eyeUniforms[0]!.set(eye0.x, eye0.y, eye0.scaleX, eye0.scaleY)
+            eyeUniforms[1]!.set(eye1.x, eye1.y, eye1.scaleX, eye1.scaleY)
+            const brow0 = state.brows[0]
+            const brow1 = state.brows[1]
+            browUniforms[0]!.set(brow0.x, brow0.y, Math.cos(-brow0.turn), Math.sin(-brow0.turn))
+            browUniforms[1]!.set(brow1.x, brow1.y, Math.cos(-brow1.turn), Math.sin(-brow1.turn))
+            const cheek0 = state.cheeks[0]
+            const cheek1 = state.cheeks[1]
+            cheekUniforms[0]!.set(cheek0.x, cheek0.y, Math.cos(-cheek0.turn), Math.sin(-cheek0.turn))
+            cheekUniforms[1]!.set(cheek1.x, cheek1.y, Math.cos(-cheek1.turn), Math.sin(-cheek1.turn))
+            gazeUniform.set(state.gaze.x, state.gaze.y)
+            chargeUniform.set(charge, chargeLevel)
+            glowUniform.value = glow
+            viewUniform.set(viewX, viewY)
+            if (wake > 0) {
+                const mistAngle = time * mistSpeed
+                mistTurnUniform.set(Math.cos(mistAngle), Math.sin(mistAngle))
+                fillFaceDust(time, dustPos, dustMeta)
             }
-            set("uEye", state.eyes, true)
-            set("uBrow", state.brows, false)
-            set("uCheek", state.cheeks, false)
-            ;(uniforms.uGaze!.value as Vector2).set(state.gaze.x, state.gaze.y)
-            ;(uniforms.uCharge!.value as Vector2).set(charge, chargeLevel)
-            uniforms.uGlow!.value = glow
-            ;(uniforms.uView!.value as Vector2).set(viewX, viewY)
             renderer.render(scene, camera)
         },
         release() {

@@ -101,6 +101,15 @@ const { stops } = Astro.props
         )
         for (const element of night.querySelectorAll("[data-rise]")) seen.observe(element)
 
+        // Pause infinite ambient layers while they are off screen
+        const ambient = new IntersectionObserver(
+            (entries) => {
+                for (const entry of entries) (entry.target as HTMLElement).toggleAttribute("data-on", entry.isIntersecting)
+            },
+            { rootMargin: "200px 0px" },
+        )
+        for (const layer of night.querySelectorAll<HTMLElement>(".rays, .nebula, .motes")) ambient.observe(layer)
+
         // The line runs from the npm coin at the horizon through every station to the last one
         const reveal = night.querySelector<HTMLElement>("[data-thread-reveal]")
         const svg = night.querySelector<SVGSVGElement>("[data-thread]")
@@ -1010,7 +1019,11 @@ const { stops } = Astro.props
         height: 1500px;
         pointer-events: none;
         transform-origin: 50% 0;
-        animation: rays-sway 46s ease-in-out infinite alternate;
+        animation: rays-sway 46s ease-in-out infinite alternate paused;
+    }
+
+    .night:not([data-still]) .rays[data-on] {
+        animation-play-state: running;
     }
 
     .rays-light {
@@ -1052,7 +1065,11 @@ const { stops } = Astro.props
         background: rgb(190 240 255 / 0.9);
         box-shadow: 0 0 6px 1px rgb(70 227 239 / 0.35);
         opacity: 0;
-        animation: mote-rise var(--d) linear var(--w) infinite;
+        animation: mote-rise var(--d) linear var(--w) infinite paused;
+    }
+
+    .night:not([data-still]) .motes[data-on] .mote {
+        animation-play-state: running;
         will-change: transform, opacity;
     }
 
@@ -1317,7 +1334,11 @@ const { stops } = Astro.props
         z-index: -1;
         height: 1100px;
         pointer-events: none;
-        animation: caustics 28s ease-in-out infinite alternate;
+        animation: caustics 28s ease-in-out infinite alternate paused;
+    }
+
+    .night:not([data-still]) .nebula[data-on] {
+        animation-play-state: running;
     }
 
     .nebula-light {

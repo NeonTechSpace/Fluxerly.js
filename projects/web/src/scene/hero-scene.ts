@@ -1,13 +1,12 @@
-// The live hero sky for Immersive. GSAP lives in this chunk alone. It drives the shared world,
-// which the Still frame draws as well, so both states show the same sky, and the conductor's
+// The live hero sky for Immersive. It drives the shared world with native requestAnimationFrame
+// easing, which the Still frame draws as well so both states show the same sky, and the conductor's
 // living face, cap and bow tie, see face.ts, cap.ts, bow.ts and face-life.ts.
 
-import { gsap } from "gsap"
 import { seededRandom } from "../lib/stars"
 import { createBow, type Bow } from "./bow"
 import { createCap, type Cap } from "./cap"
-import { createFace, type Face } from "./face"
-import { createFaceLife } from "./face-life"
+import { createFace, type Face, type FaceFrame } from "./face"
+import { createFaceLife, type FaceMood } from "./face-life"
 import { setHeroFaceMoving } from "./face-turn"
 import { lastArrival, quietAt } from "./rhythm"
 import { createWorld, restPose, type Pose } from "./world"
@@ -68,7 +67,26 @@ const gazeRest = 3.5
 const swayDegrees = 0.9
 const swayDegreesSeconds = 13
 const leanDegrees = 1.4
+// Frame-rate independent lean damping rate (matches 0.08 per frame at 60 fps)
+const leanRate = 5
 const tau = Math.PI * 2
+
+type Ease = (p: number) => number
+const power2Out: Ease = (p) => 1 - (1 - p) * (1 - p)
+const power2InOut: Ease = (p) => (p < 0.5 ? 2 * p * p : 1 - (-2 * p + 2) ** 2 / 2)
+const power3Out: Ease = (p) => 1 - (1 - p) ** 3
+
+interface TweenSlot {
+    active: boolean
+    start: number
+    from: number
+    to: number
+    duration: number
+    ease: Ease
+    onComplete: (() => void) | null
+}
+
+const makeSlot = (): TweenSlot => ({ active: false, start: 0, from: 0, to: 0, duration: 1, ease: power2Out, onComplete: null })
 
 const smooth = (from: number, to: number, x: number) => {
     const t = Math.min(1, Math.max(0, (x - from) / (to - from)))
@@ -77,7 +95,6 @@ const smooth = (from: number, to: number, x: number) => {
 
 // Only the newest scene may move the DOM conductor, an older one may still be fading out
 let conductorOwner: object | null = null
-
 
 export function createHeroScene(hero: HTMLElement): HeroScene | null {
     const slot = hero.querySelector<HTMLElement>("[data-scene-slot]")
@@ -104,13 +121,32 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
     let pointerMoved = -1e9
 
     // `immerse` eases from 0 to 1 as the scene wakes, so the pointer response never jumps in
-    const state = { motion: 1, immerse: 0, glow: 0, px: 0, py: 0, dip: 0, ex: 0, ey: 0 }
+    const state = { motion: 1, immerse: 0, glow: 0, px: 0, py: 0, dip: 0, opacity: 0 }
+    type TweenKey = keyof typeof state
+    const tweenKeys: readonly TweenKey[] = ["motion", "immerse", "glow", "px", "py", "dip", "opacity"]
+    const tweens: Record<TweenKey, TweenSlot> = {
+        motion: makeSlot(),
+        immerse: makeSlot(),
+        glow: makeSlot(),
+        px: makeSlot(),
+        py: makeSlot(),
+        dip: makeSlot(),
+        opacity: makeSlot(),
+    }
+    let activeTweens = 0
+
     const pose: Pose = { ...restPose }
+    const faceMood: FaceMood = { time: 0, wake: 0, gaze: null, attention: 0, joy: 0, breath: 0, charge: 0 }
+    const faceFrame: FaceFrame = { time: 0, wake: 0, state: life.update(faceMood), glow: 0, charge: 0, chargeLevel: 0, viewX: 0, viewY: 0 }
+    const pointScratch: [number, number] = [0, 0]
+
     // Scene time starts at zero on the first frame, so that frame is the Still frame
     let clockStart = -1
+    let lastTickTime = -1
     let sceneTime = 0
     let loaded = false
     let running = false
+    let rafId = 0
     let disposed = false
     let released = false
     // Where the hero sits on the page, kept so pointer and scroll handlers never read layout. The scene
@@ -156,11 +192,63 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
     for (const off of ["pointerleave", "blur"]) mainButton?.addEventListener(off, () => (leaning = false), { signal })
     window.addEventListener("fluxerly:copied", () => (copiedAt = sceneTime), { signal })
 
+    const nowSeconds = () => performance.now() / 1000
+
+    const scheduleFrame = () => {
+        if (!rafId && !released && (running || activeTweens > 0)) rafId = requestAnimationFrame(onFrame)
+    }
+
+    const tweenTo = (key: TweenKey, to: number, duration: number, ease: Ease, onComplete: (() => void) | null = null) => {
+        const slot = tweens[key]
+        if (!slot.active) activeTweens++
+        slot.active = true
+        slot.start = nowSeconds()
+        slot.from = state[key]
+        slot.to = to
+        slot.duration = duration
+        slot.ease = ease
+        slot.onComplete = onComplete
+        scheduleFrame()
+    }
+
+    const stepTweens = (time: number) => {
+        if (activeTweens === 0) return
+        let opacityChanged = false
+        for (let i = 0; i < tweenKeys.length; i++) {
+            const key = tweenKeys[i]!
+            const slot = tweens[key]
+            if (!slot.active) continue
+            const p = slot.duration > 0 ? Math.min(1, Math.max(0, (time - slot.start) / slot.duration)) : 1
+            state[key] = slot.from + (slot.to - slot.from) * slot.ease(p)
+            if (key === "opacity") opacityChanged = true
+            if (p >= 1) {
+                slot.active = false
+                activeTweens--
+                const done = slot.onComplete
+                slot.onComplete = null
+                done?.()
+                if (released) return
+            }
+        }
+        if (opacityChanged) canvas.style.opacity = state.opacity.toFixed(4)
+    }
+
+    const killAllTweens = () => {
+        for (let i = 0; i < tweenKeys.length; i++) {
+            const slot = tweens[tweenKeys[i]!]
+            slot.active = false
+            slot.onComplete = null
+        }
+        activeTweens = 0
+    }
+
     const tick = (time: number) => {
         const layout = world.layout
         if (!layout) return
         if (clockStart < 0) clockStart = time
         const t = time - clockStart
+        const dt = lastTickTime >= 0 ? Math.min(0.1, Math.max(0, t - lastTickTime)) : 0
+        lastTickTime = t
         sceneTime = t
         const motion = state.motion
         const immerse = state.immerse
@@ -178,7 +266,7 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
         pose.lift = dipLift * layout.height * state.dip ** dipLiftCurve
         pose.dip = state.dip
         pose.drift = motion
-        lean += ((leaning ? 1 : 0) - lean) * 0.08
+        lean += ((leaning ? 1 : 0) - lean) * (1 - Math.exp(-dt * leanRate))
         const copied = Math.exp(-(t - copiedAt) / 0.45)
         pose.glow = Math.max(state.glow, lean * 0.6 * motion, copied * 0.9 * motion)
         pose.notice = immerse * motion
@@ -225,27 +313,35 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
         // Eye contact while the pointer moves or a glance holds. Otherwise it looks around by itself
         const contact = pointer.inside && (t - pointerMoved < gazeRest || glanceUntil >= 0)
         // The cap fills with the body's breath and with the waves' charge, so it moves in time with both
-        const faceState = life.update({
-            time: t,
-            wake,
-            gaze: contact ? gazeTarget : null,
-            attention: state.glow,
-            joy: copied,
-            breath: 0.5 * (1 - Math.cos((tau * t) / breathSeconds)),
-            charge: charge * chargeOut,
-        })
-        face.render({
-            time: t,
-            wake,
-            state: faceState,
-            glow: pose.glow,
-            charge,
-            chargeLevel: Math.min(1, charged / 0.3) * chargeOut * wake,
-            viewX: state.px,
-            viewY: state.py,
-        })
+        faceMood.time = t
+        faceMood.wake = wake
+        faceMood.gaze = contact ? gazeTarget : null
+        faceMood.attention = state.glow
+        faceMood.joy = copied
+        faceMood.breath = 0.5 * (1 - Math.cos((tau * t) / breathSeconds))
+        faceMood.charge = charge * chargeOut
+        const faceState = life.update(faceMood)
+        faceFrame.time = t
+        faceFrame.wake = wake
+        faceFrame.state = faceState
+        faceFrame.glow = pose.glow
+        faceFrame.charge = charge
+        faceFrame.chargeLevel = Math.min(1, charged / 0.3) * chargeOut * wake
+        faceFrame.viewX = state.px
+        faceFrame.viewY = state.py
+        face.render(faceFrame)
         cap?.render(faceState.cap)
         bow?.render(faceState.bow)
+    }
+
+    const onFrame = () => {
+        rafId = 0
+        if (released) return
+        const time = nowSeconds()
+        stepTweens(time)
+        if (released) return
+        if (running) tick(time)
+        scheduleFrame()
     }
 
     // The sky renders only while some of the hero is on screen. Below it, a frame nobody sees would
@@ -254,22 +350,33 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
 
     const start = () => {
         if (running || !loaded || released || document.hidden || !inView) return
-        gsap.ticker.add(tick)
         running = true
+        lastTickTime = -1
         setHeroFaceMoving(owner, face !== null)
+        scheduleFrame()
     }
 
     const stop = () => {
         if (!running) return
-        gsap.ticker.remove(tick)
         running = false
         setHeroFaceMoving(owner, false)
+        if (rafId && activeTweens === 0) {
+            cancelAnimationFrame(rafId)
+            rafId = 0
+        }
     }
 
-    const onVisibility = () => (document.hidden ? stop() : start())
+    const onVisibility = () => {
+        if (document.hidden) {
+            if (disposed) release()
+            else stop()
+        } else {
+            start()
+        }
+    }
     document.addEventListener("visibilitychange", onVisibility)
     const viewObserver = new IntersectionObserver((entries) => {
-        inView = entries[entries.length - 1].isIntersecting
+        inView = entries[entries.length - 1]!.isIntersecting
         if (inView) {
             if (immersive) onScroll()
             start()
@@ -288,9 +395,13 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
     resizeObserver.observe(hero)
 
     // Immersive only: pointer parallax, the waves highlight, the scroll dip and eye contact
-    const followX = gsap.quickTo(state, "px", { duration: 1.6, ease: "power3.out" })
-    const followY = gsap.quickTo(state, "py", { duration: 1.6, ease: "power3.out" })
-    const followDip = gsap.quickTo(state, "dip", { duration: 0.9, ease: "power3.out" })
+    const followX = (to: number) => tweenTo("px", to, 1.6, power3Out)
+    const followY = (to: number) => tweenTo("py", to, 1.6, power3Out)
+    const followDip = (to: number) => {
+        if (tweens.dip.active && Math.abs(tweens.dip.to - to) < 1e-5) return
+        if (!tweens.dip.active && Math.abs(state.dip - to) < 1e-5) return
+        tweenTo("dip", to, 0.9, power3Out)
+    }
     // Where eye contact wants the eyes, each from -1 to 1. The face's own quick move carries them there
     const gazeTarget = { x: 0, y: 0 }
     let exploreHovered = false
@@ -299,16 +410,15 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
 
     const updateGlow = () => {
         const on = exploreHovered || exploreFocused || headHovered
-        gsap.to(state, { glow: on ? 1 : 0, duration: on ? 0.7 : 0.9, ease: on ? "power2.out" : "power2.inOut", overwrite: "auto" })
+        tweenTo("glow", on ? 1 : 0, on ? 0.7 : 0.9, on ? power2Out : power2InOut)
     }
 
     // A point of the conductor box in viewport pixels, where the conductor is right now
     const conductorPoint = (u: number, v: number) => {
         const box = world.layout!.conductor
-        return [
-            heroLeft - pageX + box.left + box.width * u - pose.shiftX,
-            heroTop - pageY + box.top + box.height * v + pose.bob - pose.shiftY - pose.lift,
-        ]
+        pointScratch[0] = heroLeft - pageX + box.left + box.width * u - pose.shiftX
+        pointScratch[1] = heroTop - pageY + box.top + box.height * v + pose.bob - pose.shiftY - pose.lift
+        return pointScratch
     }
 
     // Turns the eyes toward a point in viewport pixels, all the way once it is a head's width away
@@ -405,7 +515,7 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
             if (on) target?.addEventListener(type, listener, { passive: true })
             else target?.removeEventListener(type, listener)
         }
-        gsap.to(state, { immerse: on ? 1 : 0, duration: 1.2, ease: "power2.inOut", overwrite: "auto" })
+        tweenTo("immerse", on ? 1 : 0, 1.2, power2InOut)
         if (!on) {
             exploreHovered = false
             exploreFocused = false
@@ -427,11 +537,14 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
         if (released) return
         released = true
         disposed = true
+        killAllTweens()
         stop()
+        if (rafId) {
+            cancelAnimationFrame(rafId)
+            rafId = 0
+        }
         setImmersive(false)
-        gsap.killTweensOf(state)
-        gsap.killTweensOf(canvas)
-        for (const follow of [followX, followY, followDip]) follow.tween.kill()
+        killAllTweens()
         document.removeEventListener("visibilitychange", onVisibility)
         viewObserver.disconnect()
         resizeObserver.disconnect()
@@ -499,7 +612,7 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
                 if (withBow) bow = madeBow
                 faceFrom = sceneTime
                 // Its first frame at rest, then it fades in over the painted glass, whose sharpness differs a little
-                tick(gsap.ticker.time)
+                tick(nowSeconds())
                 requestAnimationFrame(() => (made.canvas.dataset.on = ""))
             })
             .catch((reason) => {
@@ -524,12 +637,14 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
             world.loadParts().catch((reason) => {
                 if (!released) console.warn("The sky's icons stay whole:", reason)
             })
-            tick(gsap.ticker.time)
+            tick(nowSeconds())
             start()
             hero.dataset.scene = "live"
             // Once the live sky covers the Still frame, the frame stops costing a layer. Leaving repaints it
             const frame = slot.querySelector<HTMLCanvasElement>("canvas[data-scene-frame]")
-            gsap.to(canvas, { opacity: 1, duration: 1.2, ease: "power2.out", onComplete: () => frame && hideFrame(frame) })
+            tweenTo("opacity", 1, 1.2, power2Out, () => {
+                if (frame) hideFrame(frame)
+            })
         })
         .catch(() => release())
 
@@ -552,9 +667,18 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
                 showFrame(frame, true)
                 if (conductorOwner === owner) hero.dataset.scene = "frame"
             }
+            if (document.hidden) {
+                release()
+                return
+            }
             // Settle the conductor and the companions back to rest while the canvas fades out over the frame
-            gsap.to(state, { motion: 0, immerse: 0, glow: 0, px: 0, py: 0, dip: 0, duration: 0.5, ease: "power2.out", overwrite: true })
-            gsap.to(canvas, { opacity: 0, duration: 0.5, ease: "power2.out", overwrite: true, onComplete: release })
+            tweenTo("motion", 0, 0.5, power2Out)
+            tweenTo("immerse", 0, 0.5, power2Out)
+            tweenTo("glow", 0, 0.5, power2Out)
+            tweenTo("px", 0, 0.5, power2Out)
+            tweenTo("py", 0, 0.5, power2Out)
+            tweenTo("dip", 0, 0.5, power2Out)
+            tweenTo("opacity", 0, 0.5, power2Out, release)
         },
     }
 }

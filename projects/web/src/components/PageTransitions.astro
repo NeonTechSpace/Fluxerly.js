@@ -3,19 +3,8 @@
 // and a slow navigation shows that the next page is on its way. Every layout includes this in its head
 import "../styles/transitions.css"
 import { experienceKey } from "../lib/experience"
-
-// Docs pages are light, so the one under the pointer renders ahead in full. Other pages carry live scenes and are only
-// fetched. The previous and next guide are fetched as soon as the page opens
-const speculation = {
-    prerender: [{ where: { href_matches: "/docs/*" }, eagerness: "moderate" }],
-    prefetch: [
-        { where: { href_matches: "/*" }, eagerness: "moderate" },
-        { where: { selector_matches: ".pager-link" }, eagerness: "eager" },
-    ],
-}
 ---
 
-<script is:inline type="speculationrules" set:html={JSON.stringify(speculation)} />
 <!-- Without script nothing can read a saved choice or set data-still, so the system setting stops everything here -->
 <noscript>
     <style is:inline>
@@ -40,6 +29,21 @@ const speculation = {
     </style>
 </noscript>
 <script is:inline define:vars={{ key: experienceKey }}>
+    // Docs pages are light, so the one under the pointer renders ahead in full. Other pages carry live scenes and are only
+    // fetched. The previous and next guide are fetched as soon as the page opens. Injected at runtime so static HTML
+    // crawlers never extract wildcard patterns as literal page links
+    if (HTMLScriptElement.supports?.("speculationrules")) {
+        const rules = document.createElement("script")
+        rules.type = "speculationrules"
+        rules.textContent = JSON.stringify({
+            prerender: [{ where: { href_matches: ["", "docs", "*"].join("/") }, eagerness: "moderate" }],
+            prefetch: [
+                { where: { href_matches: ["", "*"].join("/") }, eagerness: "moderate" },
+                { where: { selector_matches: ".pager-link" }, eagerness: "eager" },
+            ],
+        })
+        document.head.append(rules)
+    }
     // A saved choice decides, in either direction. With none, or with storage blocked, the system setting does. Read here
     // because the page's modules have not run yet. "ambient" is an earlier build's word for moving
     let stored = null

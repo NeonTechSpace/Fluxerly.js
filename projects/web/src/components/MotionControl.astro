@@ -1,0 +1,72 @@
+---
+// One switch in the header that turns the site's motion on and off. On is Immersive, off is Still,
+// which is this site's reduce motion setting. The icon is the conductor's two waves, rolling while
+// motion is on and stopped where they are once it is off. Beside them sits what a press does next,
+// pause or play, the way any player marks it, so the state reads without hovering. The tooltip is the
+// header's shared one, styled in Header.astro
+import "../styles/motion-control.css"
+---
+
+<span class="mode-control" data-motion-control>
+    <button
+        type="button"
+        class="motion"
+        role="switch"
+        aria-checked="true"
+        aria-label="Motion"
+        aria-describedby="motion-tip"
+    >
+        <!-- Each wave runs three periods long, one either side of the window, so sliding it by exactly
+             one period loops without a seam. The strip slides as a whole picture, which the compositor moves
+             without asking the page to lay out or paint again -->
+        <span class="motion-waves" aria-hidden="true">
+            <svg class="motion-strip" viewBox="-15 0 54 24" focusable="false">
+                <path class="motion-wave" d="M-15 9c3-3.6 6-3.6 9 0s6 3.6 9 0 6-3.6 9 0 6 3.6 9 0 6-3.6 9 0 6 3.6 9 0" />
+                <path class="motion-wave motion-wave-low" d="M-15 15c3-3.6 6-3.6 9 0s6 3.6 9 0 6-3.6 9 0 6 3.6 9 0 6-3.6 9 0 6 3.6 9 0" />
+            </svg>
+        </span>
+        <svg class="motion-next" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+            <path class="motion-pause" d="M3.6 2.4v7.2M8.4 2.4v7.2" />
+            <path class="motion-play" d="M3.4 2.2 9.8 6 3.4 9.8Z" />
+        </svg>
+    </button>
+    <!-- Hidden from assistive technology, which hears it once as the switch's description -->
+    <span class="mode-tip" id="motion-tip" aria-hidden="true">Pause motion</span>
+</span>
+<!-- Syncs the switch's state from <html data-still> before the first paint, so Still never flashes switched on.
+     data-ready waits for the module script below so interactive readiness and media-query reconciliation finish first -->
+<script is:inline>
+    {
+        const control = document.currentScript?.previousElementSibling
+        const button = control?.querySelector(".motion")
+        const tip = control?.querySelector("#motion-tip")
+        const moving = !document.documentElement.hasAttribute("data-still")
+        if (button) button.setAttribute("aria-checked", String(moving))
+        if (tip) tip.textContent = moving ? "Pause motion" : "Play motion"
+    }
+</script>
+
+<script>
+    import { getExperience, setExperience, subscribeExperience, type Experience } from "../lib/experience"
+
+    for (const control of document.querySelectorAll<HTMLElement>("[data-motion-control]")) {
+        const button = control.querySelector<HTMLButtonElement>(".motion")
+        const tip = control.querySelector<HTMLElement>("#motion-tip")
+        if (!button) continue
+
+        const sync = (mode: Experience) => {
+            const moving = mode !== "still"
+            button.setAttribute("aria-checked", String(moving))
+            if (tip) tip.textContent = moving ? "Pause motion" : "Play motion"
+        }
+
+        button.addEventListener("click", () => {
+            const moving = button.getAttribute("aria-checked") === "true"
+            setExperience(moving ? "still" : "immersive")
+        })
+
+        subscribeExperience(sync)
+        sync(getExperience())
+        button.dataset.ready = ""
+    }
+</script>

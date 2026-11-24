@@ -17,15 +17,15 @@
         background-color var(--speed-normal) ease;
 }
 
-/* Until the island knows the visitor's choice the switch claims neither state, so Still never loads looking switched on */
+/* Before the module script reconciles the visitor's choice, hold transitions so Still never animates into place */
 .motion:not([data-ready]) {
     transition: none;
 }
 
 html[data-still] .motion:not([data-ready]) {
     color: var(--color-muted);
-    background: none;
-    border-color: rgb(195 200 230 / 0.18);
+    background: rgb(195 200 230 / 0.04);
+    border-color: rgb(195 200 230 / 0.2);
     transition: none;
 }
 
@@ -62,7 +62,7 @@ html[data-still] .motion:not([data-ready]) {
 }
 
 /* The wave rolls while motion is on, a slow travel of the crests from left to right. It waits until the
-   island knows the state, so a visit that chose Still never sees it move */
+   script reconciles the state, so a visit that chose Still never sees it move */
 .motion-wave {
     fill: none;
     stroke: currentColor;
@@ -93,14 +93,15 @@ html[data-still] .motion:not([data-ready]) {
     }
 }
 
-/* The mark for the next press, drawn in the waves' own stroke. Hidden until the state is known */
+/* The mark for the next press, drawn in the waves' own stroke */
 .motion-next {
     width: 11px;
     height: 11px;
 }
 
-html[data-still] .motion:not([data-ready]) .motion-next {
-    visibility: hidden;
+.motion[aria-checked="true"] .motion-play,
+.motion[aria-checked="false"] .motion-pause {
+    display: none;
 }
 
 .motion-pause {

@@ -52,6 +52,12 @@ const { accent } = Astro.props
         )
         for (const element of space.querySelectorAll("[data-rise]")) seen.observe(element)
 
+        // Pause the rising stardust while space is off screen
+        const motes = space.querySelector<HTMLElement>(".motes")
+        if (motes) {
+            new IntersectionObserver(([entry]) => motes.toggleAttribute("data-on", Boolean(entry?.isIntersecting)), { rootMargin: "200px 0px" }).observe(motes)
+        }
+
         // The star fields, the bodies of space and the near plane follow the scroll in CSS, on the page's own
         // scroll timeline. They need only where the space starts and where each body is anchored, measured once
         // the page is laid out and again whenever it or the screen changes size, never while it scrolls
@@ -117,7 +123,11 @@ const { accent } = Astro.props
         background: rgb(190 240 255 / 0.9);
         box-shadow: 0 0 6px 1px rgb(70 227 239 / 0.35);
         opacity: 0;
-        animation: mote-rise var(--d) linear var(--w) infinite;
+        animation: mote-rise var(--d) linear var(--w) infinite paused;
+    }
+
+    .space:not([data-still]) .motes[data-on] .mote {
+        animation-play-state: running;
         will-change: transform, opacity;
     }
 

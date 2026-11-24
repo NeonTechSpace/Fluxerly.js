@@ -57,7 +57,7 @@ export function freezeHeroScene(hero: HTMLElement): HeroFrame | null {
         }
         if (again) {
             again = false
-            paint()
+            void paint()
         }
     }
 
@@ -71,10 +71,12 @@ export function freezeHeroScene(hero: HTMLElement): HeroFrame | null {
             if (hero.dataset.scene === "frame") delete hero.dataset.scene
         }
         window.clearTimeout(timer)
-        timer = window.setTimeout(paint, settleDelay)
+        timer = window.setTimeout(() => {
+            void paint()
+        }, settleDelay)
     })
     observer.observe(hero)
-    paint()
+    void paint()
 
     return {
         dispose() {

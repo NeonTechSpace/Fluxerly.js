@@ -44,13 +44,13 @@ const place = (piece: IconPartSet["pieces"][number]) => {
          so the floating, breathing and drifting never redraw a blur on any frame -->
     {!hollow && <span class="glow" aria-hidden="true"><span class="glow-light"></span></span>}
     <span class="float">
-        <img class="whole" src={iconSrc(name, 640)} alt={alt} width="640" height="640" loading={eager ? "eager" : "lazy"} fetchpriority={eager ? "high" : undefined} decoding={eager ? "sync" : "async"} />
+        <img class="whole" src={iconSrc(name, 640)} alt={alt} width="640" height="640" loading={eager ? "eager" : "lazy"} fetchpriority={eager ? "high" : undefined} decoding="async" />
         {
             parts && (
                 <span class="parts" aria-hidden="true">
-                    <img class="part-shadow" data-src={parts.shadow} alt="" style={`left: ${pct(-parts.shadowRoom)}; top: ${pct(-parts.shadowRoom)}; width: ${pct(1 + 2 * parts.shadowRoom)}; height: ${pct(1 + 2 * parts.shadowRoom)}`} />
+                    <img class="part-shadow" data-src={parts.shadow} alt="" decoding="async" style={`left: ${pct(-parts.shadowRoom)}; top: ${pct(-parts.shadowRoom)}; width: ${pct(1 + 2 * parts.shadowRoom)}; height: ${pct(1 + 2 * parts.shadowRoom)}`} />
                     {parts.pieces.map((piece) => (
-                        <img class="part" data-src={piece.src} data-move={piece.move?.kind} alt="" style={place(piece)} />
+                        <img class="part" data-src={piece.src} data-move={piece.move?.kind} alt="" decoding="async" style={place(piece)} />
                     ))}
                 </span>
             )
@@ -90,9 +90,9 @@ const place = (piece: IconPartSet["pieces"][number]) => {
     const seen = new IntersectionObserver((entries) => {
         for (const entry of entries) (entry.target as HTMLElement).toggleAttribute("data-seen", entry.isIntersecting)
     })
-    for (const figure of document.querySelectorAll<HTMLElement>("[data-parts]")) {
-        nearby.observe(figure)
+    for (const figure of document.querySelectorAll<HTMLElement>(".companion")) {
         seen.observe(figure)
+        if (figure.dataset.parts !== undefined) nearby.observe(figure)
     }
     subscribeExperience(() => near.forEach(wake))
 </script>
@@ -144,15 +144,21 @@ const place = (piece: IconPartSet["pieces"][number]) => {
         inset: 8%;
         opacity: 0.25;
         transition: opacity 1200ms ease;
-        animation: companion-breathe 7s ease-in-out infinite;
+        animation: companion-breathe 7s ease-in-out infinite paused;
     }
 
     .glow-light {
         position: absolute;
-        inset: 0;
+        inset: -8%;
         border-radius: 50%;
-        background: radial-gradient(circle, color-mix(in srgb, var(--accent, var(--color-cyan)) 28%, transparent), transparent 68%);
-        filter: blur(14px);
+        background: radial-gradient(
+            circle,
+            color-mix(in srgb, var(--accent, var(--color-cyan)) 26%, transparent) 0%,
+            color-mix(in srgb, var(--accent, var(--color-cyan)) 17%, transparent) 30%,
+            color-mix(in srgb, var(--accent, var(--color-cyan)) 7%, transparent) 58%,
+            color-mix(in srgb, var(--accent, var(--color-cyan)) 1.5%, transparent) 80%,
+            transparent 100%
+        );
     }
 
     /* The thread reaching the section wakes its keepsake */
@@ -161,7 +167,12 @@ const place = (piece: IconPartSet["pieces"][number]) => {
     }
 
     .float {
-        animation: companion-float 6.5s ease-in-out infinite;
+        animation: companion-float 6.5s ease-in-out infinite paused;
+    }
+
+    .companion[data-seen] .glow,
+    .companion[data-seen]:not(.resting) .float {
+        animation-play-state: running;
     }
 
     /* The reader's light reaching a companion brightens it. On the moving layer the brightness is applied
@@ -321,6 +332,9 @@ const place = (piece: IconPartSet["pieces"][number]) => {
     :global(.night[data-still]) .companion,
     :global(.night[data-still]) .float,
     :global(.night[data-still]) .glow,
+    :global(html[data-still]) .companion,
+    :global(html[data-still]) .float,
+    :global(html[data-still]) .glow,
     :global(html[data-still]) .companion[data-live] .part[data-move] {
         animation: none;
     }

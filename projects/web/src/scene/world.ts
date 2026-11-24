@@ -14,21 +14,25 @@ import {
     DoubleSide,
     LinearFilter,
     LinearMipmapLinearFilter,
+    Matrix4,
     Mesh,
     NormalBlending,
     PerspectiveCamera,
+    Plane,
     PlaneGeometry,
     Points,
     Scene,
     ShaderMaterial,
     Texture,
     TextureLoader,
+    UniformsUtils,
+    UnsignedByteType,
     Vector2,
     Vector3,
     Vector4,
     WebGLRenderer,
+    WebGLRenderTarget,
 } from "three"
-import { Reflector } from "three/examples/jsm/objects/Reflector.js"
 import { mascotArt } from "../lib/art"
 import { createStars } from "../lib/stars"
 import { createCompanions, type PointerView, type Under } from "./companions"
@@ -124,7 +128,7 @@ export function createWorld(hero: HTMLElement): World | null {
     const canvas = document.createElement("canvas")
     let renderer: WebGLRenderer
     try {
-        renderer = new WebGLRenderer({ canvas, antialias: false, alpha: false, stencil: false, powerPreference: "high-performance" })
+        renderer = new WebGLRenderer({ canvas, antialias: false, alpha: false, depth: false, stencil: false, powerPreference: "high-performance" })
     } catch {
         return null
     }
@@ -247,22 +251,54 @@ export function createWorld(hero: HTMLElement): World | null {
     const shootingStar = createShootingStar(plane, skyLayer)
     scene.add(shootingStar.mesh)
 
-    // Water with a planar reflection of everything above, except the stars and the dome
-    const water = new Reflector(plane, { clipBias: 0, multisample: 0, textureWidth: 1, textureHeight: 1, shader: waterShader })
-    const waterUniforms = (water.material as ShaderMaterial).uniforms
-    waterUniforms.uSize.value = size
-    waterUniforms.uTexel.value = new Vector2()
+    // Water with a planar reflection of everything above, except the stars and the dome. Uses an 8-bit
+    // color-only render target scissored to the visible water band, skipping depth and hidden rows above the horizon
+    const reflectionTarget = new WebGLRenderTarget(1, 1, {
+        type: UnsignedByteType,
+        depthBuffer: false,
+        stencilBuffer: false,
+        samples: 0,
+    })
+    const textureMatrix = new Matrix4()
+    const waterMaterial = new ShaderMaterial({
+        name: waterShader.name,
+        uniforms: UniformsUtils.clone(waterShader.uniforms),
+        vertexShader: waterShader.vertexShader,
+        fragmentShader: waterShader.fragmentShader,
+        depthTest: false,
+        depthWrite: false,
+    })
+    const waterUniforms = waterMaterial.uniforms
+    waterUniforms.tDiffuse!.value = reflectionTarget.texture
+    waterUniforms.textureMatrix!.value = textureMatrix
+    waterUniforms.uSize!.value = size
+    waterUniforms.uTexel!.value = new Vector2()
     const ring = new Vector4()
-    waterUniforms.uRing.value = ring
+    waterUniforms.uRing!.value = ring
+
+    const water = new Mesh(plane, waterMaterial)
     water.rotation.x = -Math.PI / 2
     water.renderOrder = 5
     water.frustumCulled = false
     scene.add(water)
-    const reflectionCamera = water.getReflectionCamera(camera)
+
+    const reflectionCamera = new PerspectiveCamera()
     reflectionCamera.layers.set(0)
     reflectionCamera.layers.enable(twinLayer)
     camera.layers.set(0)
     camera.layers.enable(skyLayer)
+
+    // Scratch math objects for the planar reflection pass, allocated once
+    const reflectorPlane = new Plane()
+    const reflectorNormal = new Vector3()
+    const reflectorWorldPosition = new Vector3()
+    const cameraWorldPosition = new Vector3()
+    const rotationMatrix = new Matrix4()
+    const lookAtPosition = new Vector3()
+    const clipPlane = new Vector4()
+    const view = new Vector3()
+    const target = new Vector3()
+    const q = new Vector4()
 
     let layout: HeroLayout | null = null
     let restHeight = 0
@@ -274,6 +310,76 @@ export function createWorld(hero: HTMLElement): World | null {
     let key = ""
     let textures: Texture[] = []
     let released = false
+
+    water.onBeforeRender = (activeRenderer, activeScene, activeCamera) => {
+        if (!layout) return
+        // Only the band from the bottom of the screen up to the horizon (plus ripple, ring and blur margin) is sampled
+        const waterShare = Math.max(0, 1 - (layout.horizon - lift) / layout.height)
+        if (waterShare <= 0) return
+
+        reflectorWorldPosition.setFromMatrixPosition(water.matrixWorld)
+        cameraWorldPosition.setFromMatrixPosition(activeCamera.matrixWorld)
+        rotationMatrix.extractRotation(water.matrixWorld)
+
+        reflectorNormal.set(0, 0, 1).applyMatrix4(rotationMatrix)
+        view.subVectors(reflectorWorldPosition, cameraWorldPosition)
+        if (view.dot(reflectorNormal) > 0) return
+
+        view.reflect(reflectorNormal).negate().add(reflectorWorldPosition)
+        rotationMatrix.extractRotation(activeCamera.matrixWorld)
+        lookAtPosition.set(0, 0, -1).applyMatrix4(rotationMatrix).add(cameraWorldPosition)
+
+        target.subVectors(reflectorWorldPosition, lookAtPosition).reflect(reflectorNormal).negate().add(reflectorWorldPosition)
+
+        reflectionCamera.position.copy(view)
+        reflectionCamera.up.set(0, 1, 0).applyMatrix4(rotationMatrix).reflect(reflectorNormal)
+        reflectionCamera.lookAt(target)
+        reflectionCamera.far = (activeCamera as PerspectiveCamera).far
+        reflectionCamera.updateMatrixWorld()
+        reflectionCamera.projectionMatrix.copy(activeCamera.projectionMatrix)
+
+        textureMatrix.set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1)
+        textureMatrix.multiply(reflectionCamera.projectionMatrix)
+        textureMatrix.multiply(reflectionCamera.matrixWorldInverse)
+        textureMatrix.multiply(water.matrixWorld)
+
+        // Oblique near clip plane on the water plane, matching Three.js Reflector
+        reflectorPlane.setFromNormalAndCoplanarPoint(reflectorNormal, reflectorWorldPosition)
+        reflectorPlane.applyMatrix4(reflectionCamera.matrixWorldInverse)
+        clipPlane.set(reflectorPlane.normal.x, reflectorPlane.normal.y, reflectorPlane.normal.z, reflectorPlane.constant)
+
+        const projection = reflectionCamera.projectionMatrix
+        const elements = projection.elements
+        q.x = (Math.sign(clipPlane.x) + elements[8]!) / elements[0]!
+        q.y = (Math.sign(clipPlane.y) + elements[9]!) / elements[5]!
+        q.z = -1
+        q.w = (1 + elements[10]!) / elements[14]!
+        clipPlane.multiplyScalar(2 / clipPlane.dot(q))
+        elements[2] = clipPlane.x
+        elements[6] = clipPlane.y
+        elements[10] = clipPlane.z + 1
+        elements[14] = clipPlane.w
+
+        const rtWidth = reflectionTarget.width
+        const rtHeight = reflectionTarget.height
+        const scissorHeight = Math.min(rtHeight, Math.ceil((waterShare + 0.05) * rtHeight) + 10)
+        reflectionTarget.scissor.set(0, 0, rtWidth, scissorHeight)
+        reflectionTarget.scissorTest = true
+
+        water.visible = false
+        const currentRenderTarget = activeRenderer.getRenderTarget()
+        const currentXrEnabled = activeRenderer.xr.enabled
+        const currentShadowAutoUpdate = activeRenderer.shadowMap.autoUpdate
+        activeRenderer.xr.enabled = false
+        activeRenderer.shadowMap.autoUpdate = false
+        activeRenderer.setRenderTarget(reflectionTarget)
+        if (activeRenderer.autoClear === false) activeRenderer.clear()
+        activeRenderer.render(activeScene, reflectionCamera)
+        activeRenderer.xr.enabled = currentXrEnabled
+        activeRenderer.shadowMap.autoUpdate = currentShadowAutoUpdate
+        activeRenderer.setRenderTarget(currentRenderTarget)
+        water.visible = true
+    }
 
     // Off-center frustum: the horizon sits at its CSS line, not mid screen, raised by the given pixels
     const project = (next: HeroLayout, by: number) => {
@@ -289,19 +395,20 @@ export function createWorld(hero: HTMLElement): World | null {
             camera.far,
         )
         camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert()
-        waterUniforms.uHorizon.value = horizon - by
+        waterUniforms.uHorizon!.value = horizon - by
     }
 
     const placeBackdrop = (mesh: Mesh, ratio: number, next: HeroLayout) => {
         const depth = focal * ratio
         const top = restHeight + (next.horizon + next.height * 0.1) * ratio
-        const bottom = -restHeight
+        // Stop just under the water plane (y = 0) so the sky and veil do not shade hidden underwater pixels
+        const bottom = -1
         mesh.position.set(0, (top + bottom) / 2, -depth)
         mesh.scale.set(next.width * 1.2 * ratio, top - bottom, 1)
         const uniforms = (mesh.material as ShaderMaterial).uniforms
-        uniforms.uHorizon.value = next.horizon
-        uniforms.uHalfWidth.value = next.width / 2
-        uniforms.uRestHeight.value = restHeight
+        uniforms.uHorizon!.value = next.horizon
+        uniforms.uHalfWidth!.value = next.width / 2
+        uniforms.uRestHeight!.value = restHeight
     }
 
     const relayout = () => {
@@ -334,7 +441,7 @@ export function createWorld(hero: HTMLElement): World | null {
             positions.setXYZ(i, (star.x * width - width / 2) * starRatio, restHeight + (horizon - star.y * height) * starRatio, -starDepth)
         })
         positions.needsUpdate = true
-        starMaterial.uniforms.uPixelRatio.value = pixelRatio
+        starMaterial.uniforms.uPixelRatio!.value = pixelRatio
 
         // The dome is laid out in rest pixels and scaled onto its plane like the stars
         const fadeTop = horizon - height * 0.4
@@ -345,14 +452,14 @@ export function createWorld(hero: HTMLElement): World | null {
             const built = buildDome({ width, height, horizon, fadeBottom })
             dome.geometry.dispose()
             dome.geometry = built.geometry
-            domeMaterial.uniforms.uGlintStep.value = (glintSweep - glintPulse) / Math.max(1, built.glintPanes - 1)
+            domeMaterial.uniforms.uGlintStep!.value = (glintSweep - glintPulse) / Math.max(1, built.glintPanes - 1)
         }
         dome.position.set(0, restHeight, -starDepth)
         dome.scale.set(starRatio, starRatio, 1)
-        domeMaterial.uniforms.uHalfWidth.value = width / 2
-        domeMaterial.uniforms.uHorizon.value = horizon
-        domeMaterial.uniforms.uFadeTop.value = fadeTop
-        domeMaterial.uniforms.uFadeBottom.value = fadeBottom
+        domeMaterial.uniforms.uHalfWidth!.value = width / 2
+        domeMaterial.uniforms.uHorizon!.value = horizon
+        domeMaterial.uniforms.uFadeTop!.value = fadeTop
+        domeMaterial.uniforms.uFadeBottom!.value = fadeBottom
 
         const box = next.conductor
         twinX = box.left + box.width / 2 - width / 2
@@ -369,10 +476,10 @@ export function createWorld(hero: HTMLElement): World | null {
         water.scale.set(width * 1.2 * skyRatio, skyDepth - 2, 1)
         const targetWidth = Math.max(1, Math.round(width * pixelRatio * reflectionScale))
         const targetHeight = Math.max(1, Math.round(height * pixelRatio * reflectionScale))
-        water.getRenderTarget().setSize(targetWidth, targetHeight)
-        waterUniforms.uTexel.value.set(1 / targetWidth, 1 / targetHeight)
-        waterUniforms.uPixelRatio.value = pixelRatio
-        waterUniforms.uFocal.value = focal
+        reflectionTarget.setSize(targetWidth, targetHeight)
+        ;(waterUniforms.uTexel!.value as Vector2).set(1 / targetWidth, 1 / targetHeight)
+        waterUniforms.uPixelRatio!.value = pixelRatio
+        waterUniforms.uFocal!.value = focal
         return true
     }
 
@@ -383,7 +490,7 @@ export function createWorld(hero: HTMLElement): World | null {
         camera.position.set(pose.shiftX, restHeight - pose.shiftY, 0)
         twin.position.set(twinX, twinY - pose.bob, -focal)
         twin.scale.set(box.width * pose.breath, box.height * pose.breath, 1)
-        twinMaterial.uniforms.uGlow.value = pose.glow
+        twinMaterial.uniforms.uGlow!.value = pose.glow
         pointer.x = pose.pointerX
         pointer.y = pose.pointerY
         pointer.notice = pose.notice
@@ -400,12 +507,12 @@ export function createWorld(hero: HTMLElement): World | null {
         } else {
             ring.w = 0
         }
-        sky.material.uniforms.uTime.value = pose.time
-        veil.material.uniforms.uTime.value = pose.time
-        starMaterial.uniforms.uTime.value = pose.time
-        waterUniforms.uTime.value = pose.time
-        waterUniforms.uDip.value = pose.dip
-        domeMaterial.uniforms.uGlintTime.value = (((pose.time - glintDelay) % glintCycle) + glintCycle) % glintCycle
+        sky.material.uniforms.uTime!.value = pose.time
+        veil.material.uniforms.uTime!.value = pose.time
+        starMaterial.uniforms.uTime!.value = pose.time
+        waterUniforms.uTime!.value = pose.time
+        waterUniforms.uDip!.value = pose.dip
+        domeMaterial.uniforms.uGlintTime!.value = (((pose.time - glintDelay) % glintCycle) + glintCycle) % glintCycle
         renderer.render(scene, camera)
     }
 
@@ -436,9 +543,11 @@ export function createWorld(hero: HTMLElement): World | null {
         const companionsLoading = companions.load(loader, hero.clientHeight, scenePixelRatio())
         // Companions take their places from where the words end, so wait for the real fonts
         const fonts = document.fonts?.ready.catch(() => {})
-        // Shaders compile in the background. The reflection target needs its own variant of each program
-        renderer.setRenderTarget(water.getRenderTarget())
-        const reflected = renderer.compileAsync(scene, camera)
+        // Shaders compile in the background. The reflection target compiles only what the reflection camera sees
+        water.visible = false
+        renderer.setRenderTarget(reflectionTarget)
+        const reflected = renderer.compileAsync(scene, reflectionCamera)
+        water.visible = true
         renderer.setRenderTarget(null)
         const direct = renderer.compileAsync(scene, camera)
         const [map, waves] = await loading
@@ -453,8 +562,8 @@ export function createWorld(hero: HTMLElement): World | null {
             texture.magFilter = LinearFilter
             texture.generateMipmaps = true
         }
-        twinMaterial.uniforms.uMap.value = map
-        twinMaterial.uniforms.uWaves.value = waves
+        twinMaterial.uniforms.uMap!.value = map
+        twinMaterial.uniforms.uWaves!.value = waves
         const companionTextures = await companionsLoading.catch(() => [])
         if (released) throw new Error("released")
         // Upload now, so the first live frame does not stall on it
@@ -492,7 +601,8 @@ export function createWorld(hero: HTMLElement): World | null {
         companions.dispose()
         dust.dispose()
         shootingStar.dispose()
-        water.dispose()
+        reflectionTarget.dispose()
+        waterMaterial.dispose()
         renderer.dispose()
         renderer.forceContextLoss()
         canvas.remove()
