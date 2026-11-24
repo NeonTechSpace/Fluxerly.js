@@ -29,7 +29,7 @@
         "effect",
         "effect-ts"
     ],
-    "version": "1002.0.0",
+    "version": "1003.0.0",
     "private": true,
     "type": "module",
     "license": "Apache-2.0",
