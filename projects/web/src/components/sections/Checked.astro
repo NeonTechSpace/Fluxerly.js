@@ -23,7 +23,7 @@ const items: Item[] = [
     },
     {
         title: "Fixes Don't Wait for a Release",
-        text: "Fluxer moves fast, and Fluxerly keeps pace with two channels. Stable releases passed every check, for bots that value calm. For bots that want changes first, the newest code goes to npm as a nightly build twice a day if the SDK changed on the main branch and passed the check, so you can use a fix without waiting for a release. Every Monday, Wednesday and Friday, a check compares Fluxer's API documents with the ones the SDK was built against. Nightly builds can include breaking changes, so pin the version and test the bot before upgrading",
+        text: "Fluxer moves fast, and Fluxerly keeps pace with two channels. Stable releases pass the full offline suite and live end-to-end checks against Fluxer, for bots that value calm. For bots that want changes first, the newest code goes to npm as a nightly build twice a day if the SDK changed on the main branch and passed checks. Every Monday, Wednesday and Friday, an automated check tracks Fluxer's API documents and server source trees (gateway, constants, errors, limits and schemas) against the commit the SDK was built on. Nightly builds can include breaking changes, so pin the version and test the bot before upgrading",
         // Exact, because a nightly can change between installs
         command: "npm install --save-exact @neontechspace/fluxerly@nightly",
     },
@@ -36,7 +36,7 @@ const items: Item[] = [
 ]
 
 // The three parts in short, under the lead
-const facts = ["A way to every route a bot can use", "Fixes on npm up to twice a day", "Security reviews with frontier AI"]
+const facts = ["A way to every route a bot can use", "Tracked against Fluxer's server, nightlies twice a day", "Security reviews with frontier AI"]
 ---
 
 <section class="checked" id="quality" aria-labelledby="quality-title" data-accent="cyan">

@@ -1,6 +1,6 @@
 # Fluxerly.js
 
-Fluxerly.js (FluxerlyJS) is a Fluxer-native bot SDK for JavaScript, TypeScript and Effect on Node.js 24.15 or newer (ESM only, TypeScript 7 for type checking)
+Fluxerly.js (FluxerlyJS) is a Fluxer-native bot SDK for JavaScript, TypeScript and Effect on Node.js 26.13 or newer (ESM only, TypeScript 7 for type checking)
 
 [Home](https://fluxerly.neontechspace.com/) ·
 [Docs](https://fluxerly.neontechspace.com/docs/) ·
@@ -26,19 +26,20 @@ The default API does not require learning or setting up Effect. Applications tha
 
 ## What Fluxerly includes
 
-Fluxerly is built for developers at every skill level, from a first bot in one file to large bots that need full control
+Fluxerly is built for developers at every skill level, from a first bot in one file to large production bots that need full control
 
-- **One-file start:** `runBot` connects, stops cleanly on Ctrl+C and explains a failed startup with a suggested fix
-- **Visible errors:** In the default API, network calls return a Result for expected failures. Check it or return it from a handler so the SDK reports the failure. Logs never contain the token, and `FLUXERLY_DEBUG=1` or the `logging` option changes what they show
-- **Built-in commands:** Prefix commands with typed arguments, guards, cooldowns, command groups and generated help
-- **Fluxer's features:** Messages with embeds, attachments and voice notes, reactions, threads and forum posts, communities and permissions, emoji and stickers, webhooks and OAuth2, with paged history and opt-in caches
-- **Typed raw access:** `client.rest.call` reaches every route that accepts a bot token with Fluxer's own field names checked at compile time, `client.rest.request` sends routes newer than the SDK, and raw gateway events carry their documented payload types
-- **Tests without a token:** The `/testing` and `/effect/testing` entry points run a bot against an in-memory gateway and HTTP server, and a test clock runs timed work such as a ten-minute reminder without waiting
-- **Two APIs, one implementation:** Start with async/await, or choose the native Effect API, with the same features and behavior in both
-- **Ready to grow:** Automatic sharding, session resume across restarts, a process supervisor, rate limiting that never blindly repeats an uncertain write, and metrics and traces through the `observe` option
-- **Agent-ready:** `fluxerly agents` adds the SDK's rules to a project's `AGENTS.md`, and the docs publish `llms.txt`
+- **One-file start and scaffolding:** The `fluxerly init` CLI creates a runnable JavaScript, TypeScript or Effect starter with a working test, and `runBot` connects, drains on Ctrl+C and explains failed startups with a fix
+- **Structured, actionable errors:** Network calls return a Result instead of throwing silently, every error carries a stable code, an actionable hint, typo suggestions on unknown options and `describeError` output with `errors.apiCode`, `errors.outcome` and `errors.retryAfterMs`, while logs mask tokens and recognized credentials automatically
+- **Built-in commands, builders and collectors:** Prefix commands with typed arguments, guards, cooldowns, middleware, command groups and generated help, alongside `EmbedBuilder`, `MessageBuilder` and message or reaction collectors
+- **Complete Fluxer coverage:** Messages, embeds, attachments, voice notes, reactions, threads and forum posts, communities, roles and permissions, emoji and stickers, webhooks and OAuth2, with paginated history and opt-in bounded caches
+- **Typed raw escape hatches:** The `client.rest.call` method reaches every bot route with Fluxer's own field names checked at compile time, `client.rest.request` reaches routes newer than the SDK, and raw gateway events carry their documented payload types
+- **Zero-network testing:** The `/testing` and `/effect/testing` entry points ship `createTestBot` with an in-memory Fluxer gateway, HTTP server and virtual test clock so timed work runs without waiting
+- **Two APIs, one engine:** Start with async/await and Results, or choose the native Effect 4 API with typed error channels, scopes and layers, backed by the same implementation
+- **Production resilience:** Automatic sharding, session resume across restarts, a process supervisor, deadline-aware rate limiting that never blindly replays uncertain writes, and metrics and traces through `observe`
+- **Built-in CLI, diagnostics and agent workflow:** Shipped TypeScript `src/` and source maps, `fluxerly doctor` for offline setup and `node_modules` drift checks, `fluxerly triage` for agent-powered root-cause debugging against shipped source with `createTestBot` reproductions, `fluxerly agents` for `AGENTS.md`, `SKILL.md`, Cursor, Claude and Gemini rules, `fluxerly invite` for offline install URLs, plus [SKILL.md](https://fluxerly.neontechspace.com/SKILL.md) and [llms.txt](https://fluxerly.neontechspace.com/llms.txt)
+- **Tracked against Fluxer's server:** Automated drift checks across Fluxer's API documents and server source trees, verified by offline contract tests, live end-to-end Fluxer checks and multi-model security reviews
 
-The result is less infrastructure to build, with testing and application structure already in place
+The result is less infrastructure to build, with testing, diagnostics and production structure already in place
 
 ## Voice
 
@@ -51,7 +52,7 @@ Fluxer moves fast, and Fluxerly keeps pace. Two channels fit different bots:
 - **Stable:** Releases that passed every check, for bots that value calm
 - **Nightly:** The newest changes as they land, for bots that want them first
 
-Fluxerly is tested against Node.js 24.15 or newer. JavaScript needs no compiler. Use TypeScript 7 to check types or compile TypeScript code, with `@types/node` as a development dependency
+Fluxerly is tested against Node.js 26.13 or newer. JavaScript needs no compiler. Use TypeScript 7 to check types or compile TypeScript code, with `@types/node` as a development dependency
 
 Install the Stable channel with npm, pnpm or Bun:
 
@@ -116,7 +117,7 @@ Run `npm ls effect`, `pnpm list effect` or `bun why effect` in the bot project t
 
 ## For coding agents
 
-Agent tools do not read instructions inside dependencies on their own. Run `npx --no fluxerly agents`, `pnpm exec fluxerly agents` or `bunx --no-install fluxerly agents` in the bot project, after installing the SDK there, to copy the SDK's rules into its `AGENTS.md`, which many coding agent tools read automatically. Pass `--target skill`, `--target cursor`, `--target claude`, `--target gemini` or `--target all` for tool-specific rule files, `--check` to verify freshness in CI, or `--print` to read the rules without writing files. Run `fluxerly doctor --json` to verify Node.js, ESM, TypeScript 7, Effect, `AGENTS.md` and `.gitignore` offline, or `fluxerly invite <applicationId>` to generate a bot installation URL offline. The complete guide is `agents/AGENTS.md` inside the installed package
+Agent tools do not read instructions inside dependencies on their own. Run `npx --no fluxerly agents`, `pnpm exec fluxerly agents` or `bunx --no-install fluxerly agents` in the bot project, after installing the SDK there, to copy the SDK's rules into its `AGENTS.md`, which many coding agent tools read automatically. Pass `--target skill`, `--target cursor`, `--target claude`, `--target gemini` or `--target all` for tool-specific rule files, `--check` to verify freshness in CI, or `--print` to read the rules without writing files. Run `fluxerly doctor --json` for offline static checks (Node.js, ESM, `tsconfig.json`, TypeScript 7, Effect, installed `node_modules` drift, `AGENTS.md` and `.gitignore`), `fluxerly triage` to diagnose bot or SDK issues with a coding agent (or `--print` for a redacted triage brief), or `fluxerly invite <applicationId>` to generate a bot installation URL offline. The complete guide is `agents/AGENTS.md` inside the installed package
 
 Agents that read web pages can start from the compact [SKILL.md](https://fluxerly.neontechspace.com/SKILL.md) or the docs' [llms.txt](https://fluxerly.neontechspace.com/llms.txt), which links the newest version's Markdown guides, split task maps and condensed API reference
 

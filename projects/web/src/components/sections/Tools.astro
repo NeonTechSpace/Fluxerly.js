@@ -9,33 +9,38 @@ const code = (text: string) => `<code class="inline-code">${text}</code>`
 // Each tool ends in the page it is read about, or the command that runs it
 const items = [
     {
-        title: "Docs in Your Editor",
-        text: "The documentation lives in the type declarations, so autocompletion in the editor shows the same text as the API reference",
+        title: "Docs and Source in Your Editor",
+        text: `The documentation lives in the type declarations alongside the shipped TypeScript ${code("src/")} files and source maps, so autocompletion and go-to-definition show the exact code and reference text`,
         href: links.apiReference,
         link: "API Reference",
     },
     {
         title: "Test Helpers Included",
-        text: `The ${code("/testing")} and ${code("/effect/testing")} entry points come with the SDK. A project from ${code("fluxerly init")} starts with its first test`,
+        text: `The ${code("/testing")} and ${code("/effect/testing")} entry points come with the SDK. A project from ${code("fluxerly init")} starts with its first zero-network test`,
         href: guide("testing"),
         link: "Testing Guide",
     },
     {
-        title: "Rules for Coding Agents",
-        text: `${code("fluxerly agents")} adds the SDK's rules to the ${code("AGENTS.md")} of a project that has the SDK installed, and the docs publish ${code("llms.txt")}. The rules are plain text a person can read too. Nothing here needs an AI tool`,
+        title: "Project Checks, Triage and Invite CLI",
+        text: `Run ${code("fluxerly doctor")} for offline static checks on Node.js, ESM, ${code("tsconfig.json")}, TypeScript 7, Effect and installed package drift, ${code("fluxerly triage")} to investigate bot or SDK bugs with Claude Code, Codex or Antigravity against shipped ${code("src/")}, and ${code("fluxerly invite")} to build permission URLs offline`,
+        command: "npx --no fluxerly triage",
+    },
+    {
+        title: "Rules and Skills for Coding Agents",
+        text: `The ${code("fluxerly agents")} command syncs the SDK's rules into ${code("AGENTS.md")}, ${code("SKILL.md")}, Cursor, Claude and Gemini rule files, and the docs publish ${code("SKILL.md")} and ${code("llms.txt")}. The rules are plain text a person can read too, and nothing here needs an AI tool`,
         command: "npx --no fluxerly agents",
     },
 ]
 
 // The tools in short, under the lead
-const facts = ["Documentation in the declarations", "Test helpers included", "Rules for coding agents"]
+const facts = ["Docs and source in the package", "Test helpers included", "Offline doctor, agent triage and invite CLI", "Rules and skills for coding agents"]
 ---
 
 <section class="tools" id="tools" aria-labelledby="tools-title" data-accent="violet">
     <div class="split" data-side="right">
         <div class="intro" data-rise>
             <h2 class="section-title" id="tools-title"><span class="station" data-station="tools" aria-hidden="true"></span>Tools That Come <span class="hi">with the SDK</span></h2>
-            <p class="lead">Editor documentation, test helpers and agent rules all come in the package you install</p>
+            <p class="lead">Editor docs, full source, test helpers, diagnostics CLI and agent rules all ship in the package you install</p>
             <ul class="facts">
                 {
                     facts.map((fact) => (

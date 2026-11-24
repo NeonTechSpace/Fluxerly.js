@@ -19,7 +19,7 @@ export interface Question {
 const groups = [
     { title: "Using Fluxerly", ids: ["slash-commands", "effect", "intents", "node", "voice", "rate-limits"] },
     { title: "How It Behaves", ids: ["stable", "results", "testing", "message-methods", "missing-method"] },
-    { title: "Fluxerly and AI", ids: ["built-with-ai", "avoid-ai", "trust-ai-code", "ai-slop"] },
+    { title: "Fluxerly and AI", ids: ["built-with-ai", "why-ai", "trust-ai-code", "avoid-ai"] },
 ]
 
 export const questions: Question[] = [
@@ -75,28 +75,28 @@ export const questions: Question[] = [
     {
         id: "built-with-ai",
         question: "Is Fluxerly Built with AI?",
-        answer: "Yes. Keeping an SDK on par with a platform that moves as fast as Fluxer takes a lot of work nobody sees, and AI is an underrated help with it. Human time, attention and energy are scarce and shouldn't be wasted, so AI writes the code while maintainers choose the direction. Their attention goes where mistakes cost the most",
+        answer: "Yes. Fluxerly is built with AI as a core part of its workflow, not an afterthought. Automation handles implementation, broad research across Fluxer's source and parallel passes at a pace hand-typing cannot match, which lets Fluxerly stay closer to upstream changes, ship deeper coverage and keep maintainers focused on architecture, standards and priorities",
         href: "#quality",
         link: "Quality, Speed and Security",
     },
     {
+        id: "why-ai",
+        question: "Why Not Write Everything by Hand?",
+        answer: "Writing every line by hand is not inherently better software engineering. Tracking a fast-moving platform takes constant reading of upstream commits, parallel audits, exhaustive edge-case coverage and repetitive contract updates that automation handles faster and more thoroughly than manual effort alone. That extra reach shows up directly in fewer missed edge cases, quicker fixes and more complete documentation",
+    },
+    {
         id: "trust-ai-code",
-        question: "Can Code Written with AI Be Trusted?",
-        answer: "As far as it can be tested. Code is judged by what it does, not who wrote it, and which check catches each mistake matters more than whether someone read every line. Hard-to-test code, plus overconfidence in how well it's understood, fails whoever wrote it. Before work lands, AI reviewers check it with fresh eyes, and every finding is fixed or answered with a reason. A change must show evidence, such as passing tests, not claims, and stable ships only code a nightly already shipped",
+        question: "How Is AI-Written Code Verified?",
+        answer: "The same way any reliable software is verified: By what it proves under test, not by how it was typed. Because automation makes thorough testing and multi-pass review cheap to run on every change, work goes through strict type checks, contract checks against Fluxer's pinned source, isolated fuzz and simulation runs, independent review passes and live sandbox runs against Fluxer before a stable release ships",
         href: "#quality",
         link: "Quality, Speed and Security",
     },
     {
         id: "avoid-ai",
-        question: "Is Fluxerly for Me if I Avoid AI?",
-        answer: "Yes. Nothing in the SDK needs an AI tool. The docs are designed so you can find what you need without one: Guides are organized by task with code you can copy, a task index points from a goal to the right guide, and hover cards explain terms where they appear. Every method is typed and documented, so your editor shows its options and errors as you write",
+        question: "Does Fluxerly Require AI Tools to Use?",
+        answer: "No. Everything in the SDK works cleanly without an AI tool: Guides are organized by task with copyable examples, hover definitions explain terms inline, and strict TypeScript types show valid options and errors directly in the editor. For developers who do use coding agents, Fluxerly also ships ready-to-use agent rules, machine-readable docs and a CLI setup command",
         href: guide("quick-start"),
         link: "Quick Start",
-    },
-    {
-        id: "ai-slop",
-        question: "Isn't Code Written by AI Slop?",
-        answer: "Not by nature. Much of that image is misrepresented, though AI multiplies the bad as much as the good. People who put ego over growing and learning fast wrote careless code long before AI, as AI exposes that carelessness rather than creating it. The result depends on what the person knows about their field and about AI, and which models and workflows they choose. Slop grows where nobody tends the code",
     },
     {
         id: "rate-limits",

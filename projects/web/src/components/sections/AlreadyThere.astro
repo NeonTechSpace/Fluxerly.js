@@ -22,15 +22,15 @@ const items: Item[] = [
     {
         icon: "results-signpost",
         title: "Failures You Can Read",
-        text: "Network calls return a Result, a success or a failure, instead of throwing, so your code handles expected errors where they happen. The SDK masks the bot token and other recognized credentials in everything it logs",
+        text: "Network calls return a Result, a success or a failure, instead of throwing, so your code handles expected errors where they happen. Every SDK error carries a code, an actionable hint, typo suggestions on unknown options and <code class=\"inline-code\">describeError</code> output, while logs mask tokens and recognized credentials automatically",
         code: "if (sent.isErr()) throw sent.error",
         href: guide("reliability"),
         link: "Reliability Guide",
     },
     {
         icon: "commands-key",
-        title: "Commands with the Plumbing Done",
-        text: "Prefix commands such as <code class=\"inline-code\">!greet</code> come with typed arguments, guards, cooldowns and groups. Help is generated from the same definitions",
+        title: "Commands, Builders and Collectors",
+        text: "Prefix commands such as <code class=\"inline-code\">!greet</code> come with typed arguments, guards, cooldowns, middleware, groups and generated help, alongside embed and message builders and message or reaction collectors",
         code: 'arguments: { name: { type: "text", rest: true } },\ncooldown: { durationMs: 5_000, per: "user" },',
         href: guide("commands"),
         link: "Commands Guide",
@@ -70,7 +70,7 @@ const items: Item[] = [
 ]
 
 // The six parts in short, under the lead, in the order they are listed
-const facts = ["Results instead of throws", "Prefix commands with typed arguments", "Tests against an in-memory Fluxer", "Rate limits waited out", "A clean stop on Ctrl+C", "Automatic sharding and metrics"]
+const facts = ["Results, hints and structured errors", "Commands, builders and collectors", "Tests against an in-memory Fluxer", "Rate limits waited out", "A clean stop on Ctrl+C", "Automatic sharding and metrics"]
 ---
 
 <section class="already" id="already-there" aria-labelledby="already-title" data-accent="violet">
