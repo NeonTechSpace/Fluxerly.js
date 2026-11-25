@@ -9,7 +9,6 @@ export interface PlaygroundPreset {
     readonly mode: SandboxMode
     readonly filename: string
     readonly quickMessages: readonly string[]
-    readonly guidedFault?: { readonly label: string; readonly fault: "429" | "403" | "404" | "disconnect" }
     readonly code: string
 }
 
@@ -74,14 +73,13 @@ export default defineBot({
         id: "results",
         label: "Results",
         tagline: "Inspect typed Result failures and describeError hints without crashes",
-        guide: "Click Simulate 403, then send !announce to see Fluxerly return a typed Result with a hint instead of crashing",
+        guide: "Click 403, send !announce, then open Logs to see Fluxerly return a typed Result with a hint instead of crashing",
         mode: "default",
         filename: "results.ts",
         quickMessages: ["!announce Live in 1003", "!check"],
-        guidedFault: { label: "Simulate 403", fault: "403" },
         code: `import { defineBot, describeError, errors } from "@neontechspace/fluxerly"
 
-// Click "Simulate 403" in the channel bar, then send !announce
+// Click 403 in the channel bar, then send !announce
 export default defineBot({
     commands: {
         prefix: "!",
@@ -124,14 +122,13 @@ export default defineBot({
         id: "resilience",
         label: "429 & Resume",
         tagline: "Arm a real 429 or drop the gateway socket and watch automatic recovery",
-        guide: "Click Simulate 429, send !ping to watch auto-retry, then send !status to see the counter increase",
+        guide: "Click 429, send !ping to watch auto-retry, then send !status to see the counter increase",
         mode: "default",
         filename: "resilience.ts",
         quickMessages: ["!ping", "!status"],
-        guidedFault: { label: "Simulate 429", fault: "429" },
         code: `import { builders, colors, defineBot } from "@neontechspace/fluxerly"
 
-// Click "Simulate 429" then !ping, then !status to see live recovery counters
+// Click 429 then !ping, then !status to see live recovery counters
 export default defineBot({
     commands: {
         prefix: "!",
@@ -212,15 +209,14 @@ export default defineBot({
         id: "effect",
         label: "Effect 4",
         tagline: "Run the native Effect 4 API with Effect.gen and typed failure handling",
-        guide: "Send !ping or click Simulate 403 then !ping to watch Effect.catch handle the typed error",
+        guide: "Send !ping, or click 403, send !ping, and open Logs to watch Effect.catch handle the typed error",
         mode: "effect",
         filename: "bot-effect.ts",
         quickMessages: ["!ping", '!echo "Hello Effect 4"'],
-        guidedFault: { label: "Simulate 403", fault: "403" },
         code: `import { Effect } from "effect"
 import { builders, colors, commands, defineBot, describeError } from "@neontechspace/fluxerly/effect"
 
-// Try clicking "Simulate 403" then !ping to watch Effect.catch handle the typed failure
+// Try clicking 403 then !ping to watch Effect.catch handle the typed failure
 export default defineBot({
     commands: {
         prefix: "!",

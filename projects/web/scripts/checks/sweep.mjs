@@ -605,7 +605,7 @@ part("parts", ["/", "/commands/", "/effect/", "/first-reply/", "/testing/", "/pr
     await inParallel(pages.filter(covers), async (route) => {
         const { context, page } = await openPage(screen, "immersive")
         await page.goto(site.url + route, { waitUntil: "load" })
-        await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important} .glow{visibility:hidden!important}" })
+        await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important}" })
         for (const figure of await page.$$(".companion[data-parts]")) {
             await figure.scrollIntoViewIfNeeded()
             // Bounded only so a broken page can't hang the run. A busy machine took more than 8 s for the homepage's first icon

@@ -1,15 +1,15 @@
 // GET /api/npm-downloads: the npm download history of the SDK package, as the homepage chart reads it. It has
 // the same shape as src/data/npm-downloads.json, which is only the build's first paint and fallback
 //
-// The counts update when a new version of the site is deployed, and from then on once a day after 04:00 UTC. npm
-// counts whole UTC days and publishes the previous one around 01:00 UTC, so 04:00 leaves it three hours. The deploy
-// fetches the counts into the snapshot this file is built with. After that npm is asked about once a day for everyone.
+// The counts update when a new version of the site is deployed, and from then on once a day after 02:00 Europe/Berlin
+// time (01:00 UTC in winter, 00:00 UTC in summer, following Berlin daylight saving transitions). The deploy fetches the
+// counts into the snapshot this file is built with. After that npm is asked about once a day for everyone.
 // The global copy lives in Workers KV under one key, with the time it was fetched, and the newer of that copy and the
-// snapshot is the one served. A copy is fresh until the first 04:00 UTC after it was fetched, so every location counts
-// to the same moment. In front of KV, each Cloudflare location keeps the answer in its edge cache until that moment,
-// under a key tied to this deployment, so most requests touch neither KV nor npm, and a deploy replaces every
-// location's answer at once. Browsers keep it until that moment too. A copy past that time is still served at once and
-// refreshed in the background, so nobody waits for npm, and browsers keep that one for a minute only
+// snapshot is the one served. A copy is fresh until the first 02:00 Europe/Berlin after it was fetched, so every
+// location counts to the same moment. In front of KV, each Cloudflare location keeps the answer in its edge cache until
+// that moment, under a key tied to this deployment, so most requests touch neither KV nor npm, and a deploy replaces
+// every location's answer at once. Browsers keep it until that moment too. A copy past that time is still served at
+// once and refreshed in the background, so nobody waits for npm, and browsers keep that one for a minute only
 //
 // One-time setup, before the first deploy that carries this file:
 //   1. Create the KV namespace: wrangler kv namespace create NPM_DOWNLOADS
@@ -21,7 +21,7 @@
 // day on its own
 
 import snapshot from "../../src/data/npm-downloads.json" with { type: "json" }
-import { fetchNpmHistory, isNpmHistory, type NpmHistory } from "../../src/lib/npm-history.ts"
+import { fetchNpmHistory, isNpmHistory, isoDay, type NpmHistory } from "../../src/lib/npm-history.ts"
 
 // The few parts of the Workers runtime that this file touches, so it type-checks without the Workers types
 interface Kv {
@@ -46,6 +46,22 @@ interface Copy {
 const kvKey = "history"
 const hourMs = 60 * 60 * 1000
 const dayMs = 24 * hourMs
+const refreshTimeZone = "Europe/Berlin"
+const refreshHour = 2
+// In summer (CEST = UTC+2), 02:00 Europe/Berlin is 00:00 UTC before npm finishes publishing yesterday's UTC counts.
+// Retry hourly during the first 6 hours of the UTC day when yesterday is still missing instead of caching for 24 hours
+const pendingDayRetryMs = hourMs
+const pendingDayUtcCutoffHour = 6
+const berlinParts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: refreshTimeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+})
 // A cache entry, at the edge or in a browser, never lives for less than this, so a stale copy is not looked up again on
 // every request
 const shortestCacheMs = 60 * 1000
@@ -98,7 +114,7 @@ async function writeKv(kv: Kv | undefined, copy: Copy) {
 
 // The entry lives for the given time, which the edge cache takes from the entry's own Cache-Control
 async function cachePut(edge: EdgeCache | undefined, key: Request, copy: Copy, lifetimeMs: number) {
-    const headers = { ...json, "cache-control": `public, max-age=${cacheSeconds(lifetimeMs)}`, [staleAtHeader]: String(nextRefresh(copy.fetchedAt)) }
+    const headers = { ...json, "cache-control": `public, max-age=${cacheSeconds(lifetimeMs)}`, [staleAtHeader]: String(copyStaleAt(copy)) }
     try {
         await edge?.put(key, new Response(JSON.stringify(copy.history), { headers }))
     } catch (error) {
@@ -106,11 +122,63 @@ async function cachePut(edge: EdgeCache | undefined, key: Request, copy: Copy, l
     }
 }
 
-// The first 04:00 UTC after the given moment
-const nextRefresh = (time: number) => Math.floor((time - 4 * hourMs) / dayMs) * dayMs + 4 * hourMs + dayMs
+function berlinDateParts(time: number): { year: number; month: number; day: number; hour: number; minute: number; second: number } {
+    let year = 0
+    let month = 0
+    let day = 0
+    let hour = 0
+    let minute = 0
+    let second = 0
+    for (const part of berlinParts.formatToParts(new Date(time))) {
+        if (part.type === "year") year = Number(part.value)
+        else if (part.type === "month") month = Number(part.value)
+        else if (part.type === "day") day = Number(part.value)
+        else if (part.type === "hour") hour = Number(part.value)
+        else if (part.type === "minute") minute = Number(part.value)
+        else if (part.type === "second") second = Number(part.value)
+    }
+    return { year, month, day, hour, minute, second }
+}
 
-// How long a copy has left before the first 04:00 UTC after it was fetched. Every location counts to the same moment
-const timeLeft = (copy: Copy) => nextRefresh(copy.fetchedAt) - Date.now()
+// Offset of Europe/Berlin relative to UTC at the given instant (+1 h in CET, +2 h in CEST)
+function berlinOffsetMs(time: number): number {
+    const p = berlinDateParts(time)
+    const wallAsUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second)
+    return wallAsUtc - Math.floor(time / 1000) * 1000
+}
+
+// UTC timestamp of 02:00 Europe/Berlin on the given Berlin calendar date.
+// On spring-forward Sunday (02:00 skipped -> 03:00 CEST), lands on the transition instant 01:00 UTC.
+// On fall-back Sunday (02:00 repeated), lands on the first 02:00 (00:00 UTC = 02:00 CEST)
+function berlinRefreshUtc(year: number, month: number, day: number): number {
+    const wall = Date.UTC(year, month - 1, day, refreshHour, 0, 0)
+    return wall - berlinOffsetMs(wall - 2 * hourMs)
+}
+
+// The first 02:00 Europe/Berlin after the given moment
+function nextRefresh(time: number): number {
+    const { year, month, day } = berlinDateParts(time)
+    const today = berlinRefreshUtc(year, month, day)
+    if (today > time) return today
+    const tomorrow = new Date(Date.UTC(year, month - 1, day + 1))
+    return berlinRefreshUtc(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth() + 1, tomorrow.getUTCDate())
+}
+
+// When a copy expires: normally at the first 02:00 Europe/Berlin after it was fetched, or after an hour during the
+// early UTC window when npm has not published yesterday's UTC count yet
+function copyStaleAt(copy: Copy): number {
+    const scheduled = nextRefresh(copy.fetchedAt)
+    const utcHour = new Date(copy.fetchedAt).getUTCHours()
+    if (utcHour < pendingDayUtcCutoffHour) {
+        const expectedLastDay = isoDay(Date.parse(`${isoDay(copy.fetchedAt)}T00:00:00Z`) - dayMs)
+        const lastDay = copy.history.days.at(-1)?.day ?? ""
+        if (lastDay < expectedLastDay) return Math.min(scheduled, copy.fetchedAt + pendingDayRetryMs)
+    }
+    return scheduled
+}
+
+// How long a copy has left before it goes stale. Every location counts to the same moment
+const timeLeft = (copy: Copy) => copyStaleAt(copy) - Date.now()
 
 let inflightRefresh: Promise<Copy> | undefined
 let inflightStaleRefresh: Promise<void> | undefined
@@ -163,7 +231,7 @@ export async function answerDownloads(context: Context, built: Copy | undefined)
         if (left > 0) {
             context.waitUntil(cachePut(edge, key, stored, left))
         } else {
-            // Past its 04:00 UTC: served as it is, while this isolate runs one shared background refresh
+            // Past its 02:00 Europe/Berlin: served as it is, while this isolate runs one shared background refresh
             if (!inflightStaleRefresh) {
                 inflightStaleRefresh = (async () => {
                     await cachePut(edge, key, stored, shortestCacheMs)
@@ -180,14 +248,14 @@ export async function answerDownloads(context: Context, built: Copy | undefined)
             }
             context.waitUntil(inflightStaleRefresh)
         }
-        return answer(request, JSON.stringify(stored.history), nextRefresh(stored.fetchedAt))
+        return answer(request, JSON.stringify(stored.history), copyStaleAt(stored))
     }
 
     // No copy anywhere: this request waits for npm, and has nothing older to fall back on if npm fails
     try {
         const copy = await fetchCopy(kv)
         context.waitUntil(cachePut(edge, key, copy, timeLeft(copy)))
-        return answer(request, JSON.stringify(copy.history), nextRefresh(copy.fetchedAt))
+        return answer(request, JSON.stringify(copy.history), copyStaleAt(copy))
     } catch (error) {
         console.error("npm could not be asked for the download counts", error)
         return new Response("The download counts are not available right now", { status: 503, headers: { "content-type": "text/plain", "cache-control": "no-store" } })

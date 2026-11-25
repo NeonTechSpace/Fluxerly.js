@@ -28,7 +28,9 @@ import CodeEditor from "./CodeEditor"
 import { getPreset, playgroundPresets, type PlaygroundPreset } from "./playground-presets"
 import "./playground.css"
 
-type InspectorTab = "logs" | "rest" | "gateway"
+type RightTab = "channel" | "logs" | "rest" | "gateway"
+
+const rightTabs: readonly RightTab[] = ["channel", "logs", "rest", "gateway"]
 
 interface ChatItem {
     readonly id: number
@@ -265,7 +267,6 @@ export default function Playground() {
     const [mode, setMode] = useState<SandboxMode>(playgroundPresets[0]!.mode)
     const [code, setCode] = useState<string>(playgroundPresets[0]!.code)
     const [autoRun, setAutoRun] = useState(true)
-    const [advanced, setAdvanced] = useState(false)
 
     const [iframeSrcDoc, setIframeSrcDoc] = useState<string | null>(null)
     const [iframeKey, setIframeKey] = useState(0)
@@ -288,7 +289,7 @@ export default function Playground() {
     const [sending, setSending] = useState(false)
     const [armedFault, setArmedFault] = useState<Exclude<SandboxFaultKind, "disconnect"> | null>(null)
 
-    const [inspectorTab, setInspectorTab] = useState<InspectorTab>("logs")
+    const [rightTab, setRightTab] = useState<RightTab>("channel")
     const [consoleEntries, setConsoleEntries] = useState<SandboxConsoleEntry[]>([])
     const [telemetry, setTelemetry] = useState<SandboxTelemetry>(emptyTelemetry)
     const [shareStatus, setShareStatus] = useState<"idle" | "copied" | "ready" | "too-large">("idle")
@@ -304,6 +305,8 @@ export default function Playground() {
     const lastRanRef = useRef<{ readonly code: string; readonly mode: SandboxMode } | null>(null)
     const chatSeqRef = useRef(1)
     const chatLogRef = useRef<HTMLDivElement>(null)
+    const lastScrolledChatIdRef = useRef(0)
+    const tabRefs = useRef<Partial<Record<RightTab, HTMLButtonElement | null>>>({})
     const latestCodeRef = useRef(code)
     const latestModeRef = useRef(mode)
     const sharedPendingRunRef = useRef(sharedPendingRun)
@@ -336,26 +339,6 @@ export default function Playground() {
         update()
         return subscribeExperience(update)
     }, [])
-
-    useEffect(() => {
-        try {
-            if (window.localStorage.getItem("fluxerly.playground.advanced") === "1") setAdvanced(true)
-        } catch {
-            // Storage may be unavailable in strict privacy modes
-        }
-    }, [])
-
-    const toggleAdvanced = () => {
-        setAdvanced((previous) => {
-            const next = !previous
-            try {
-                window.localStorage.setItem("fluxerly.playground.advanced", next ? "1" : "0")
-            } catch {
-                // Ignore storage write errors
-            }
-            return next
-        })
-    }
 
     // Restore shared code from URL hash (#s=...) or preset hash (#results, #effect, etc.) on mount.
     // Shared snippets (#s=...) never execute automatically on arrival; the visitor reviews and clicks Run explicitly
@@ -601,7 +584,7 @@ export default function Playground() {
                     additions.push({
                         id: chatSeqRef.current++,
                         kind: "error",
-                        text: `Delivery rejected with HTTP ${pending.faultWas}. Switch to Advanced to inspect Logs and REST details`,
+                        text: `Delivery rejected with HTTP ${pending.faultWas}. Open the Logs or REST tab to inspect details`,
                     })
                 } else {
                     additions.push({
@@ -651,9 +634,31 @@ export default function Playground() {
     }, [code, mode, autoRun, bootState, hashSettled, sharedPendingRun, triggerRun])
 
     useEffect(() => {
+        if (chat.length === 0) {
+            lastScrolledChatIdRef.current = 0
+            return
+        }
+        if (rightTab !== "channel") return
+        const latestId = chat.at(-1)?.id ?? 0
+        if (latestId === lastScrolledChatIdRef.current) return
+        lastScrolledChatIdRef.current = latestId
         const log = chatLogRef.current
         if (log) log.scrollTop = log.scrollHeight
-    }, [chat])
+    }, [chat, rightTab])
+
+    const onTabKeyDown = (event: { key: string; preventDefault(): void }, current: RightTab) => {
+        const index = rightTabs.indexOf(current)
+        let nextIndex = -1
+        if (event.key === "ArrowRight") nextIndex = (index + 1) % rightTabs.length
+        else if (event.key === "ArrowLeft") nextIndex = (index - 1 + rightTabs.length) % rightTabs.length
+        else if (event.key === "Home") nextIndex = 0
+        else if (event.key === "End") nextIndex = rightTabs.length - 1
+        if (nextIndex < 0) return
+        event.preventDefault()
+        const next = rightTabs[nextIndex]!
+        setRightTab(next)
+        tabRefs.current[next]?.focus()
+    }
 
     const selectPreset = (preset: PlaygroundPreset) => {
         setPresetId(preset.id)
@@ -801,16 +806,6 @@ export default function Playground() {
 
                     <button
                         type="button"
-                        className="pg-btn pg-btn-subtle"
-                        data-active={advanced || undefined}
-                        aria-pressed={advanced}
-                        onClick={toggleAdvanced}
-                    >
-                        {advanced ? "Advanced" : "Guided"}
-                    </button>
-
-                    <button
-                        type="button"
                         className="pg-btn pg-btn-primary"
                         disabled={(bootState !== "ready" && !sandboxTimedOut) || running}
                         onClick={() => triggerRun()}
@@ -843,7 +838,7 @@ export default function Playground() {
                 </div>
             </div>
 
-            <div className="pg-split" data-advanced={advanced || undefined}>
+            <div className="pg-split">
                 <section className="pg-pane pg-editor-pane glass" aria-label="SDK Code Editor">
                     <header className="pg-pane-head">
                         <div className="pg-file-meta">
@@ -856,7 +851,7 @@ export default function Playground() {
                                 <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} />
                                 <span>Auto-Run</span>
                             </label>
-                            {advanced && <span className="pg-shortcut" aria-hidden="true">Ctrl+Enter</span>}
+                            <span className="pg-shortcut" aria-hidden="true">Ctrl+Enter</span>
                         </div>
                     </header>
 
@@ -878,70 +873,145 @@ export default function Playground() {
                     )}
                 </section>
 
-                <div className="pg-right-stack" data-advanced={advanced || undefined}>
-                    <section className="pg-pane pg-channel-pane glass" aria-label="Live Simulated Fluxer Channel">
-                        <header className="pg-pane-head">
-                            <div className="pg-channel-id">
+                <section className="pg-pane pg-right-pane glass" aria-label="Live Simulated Fluxer Channel and Runtime Inspector">
+                    <header className="pg-pane-head pg-right-head">
+                        <div className="pg-view-tabs" role="tablist" aria-label="Playground Output Views">
+                            <button
+                                ref={(node) => {
+                                    tabRefs.current.channel = node
+                                }}
+                                type="button"
+                                role="tab"
+                                id={`${baseId}-tab-channel`}
+                                aria-controls={`${baseId}-panel-channel`}
+                                className="pg-vtab"
+                                aria-selected={rightTab === "channel"}
+                                tabIndex={rightTab === "channel" ? 0 : -1}
+                                onClick={() => setRightTab("channel")}
+                                onKeyDown={(event) => onTabKeyDown(event, "channel")}
+                            >
                                 <span className="pg-hash" aria-hidden="true">#</span>
-                                <h2>Live Channel</h2>
-                            </div>
+                                Channel
+                            </button>
+                            <button
+                                ref={(node) => {
+                                    tabRefs.current.logs = node
+                                }}
+                                type="button"
+                                role="tab"
+                                id={`${baseId}-tab-logs`}
+                                aria-controls={`${baseId}-panel-logs`}
+                                className="pg-vtab"
+                                aria-selected={rightTab === "logs"}
+                                tabIndex={rightTab === "logs" ? 0 : -1}
+                                onClick={() => setRightTab("logs")}
+                                onKeyDown={(event) => onTabKeyDown(event, "logs")}
+                            >
+                                Logs
+                                <span className="pg-vtab-count">{consoleEntries.length + telemetry.logs.length}</span>
+                            </button>
+                            <button
+                                ref={(node) => {
+                                    tabRefs.current.rest = node
+                                }}
+                                type="button"
+                                role="tab"
+                                id={`${baseId}-tab-rest`}
+                                aria-controls={`${baseId}-panel-rest`}
+                                className="pg-vtab"
+                                aria-selected={rightTab === "rest"}
+                                tabIndex={rightTab === "rest" ? 0 : -1}
+                                onClick={() => setRightTab("rest")}
+                                onKeyDown={(event) => onTabKeyDown(event, "rest")}
+                            >
+                                REST
+                                <span className="pg-vtab-count">{telemetry.requests.length}</span>
+                            </button>
+                            <button
+                                ref={(node) => {
+                                    tabRefs.current.gateway = node
+                                }}
+                                type="button"
+                                role="tab"
+                                id={`${baseId}-tab-gateway`}
+                                aria-controls={`${baseId}-panel-gateway`}
+                                className="pg-vtab"
+                                aria-selected={rightTab === "gateway"}
+                                tabIndex={rightTab === "gateway" ? 0 : -1}
+                                onClick={() => setRightTab("gateway")}
+                                onKeyDown={(event) => onTabKeyDown(event, "gateway")}
+                            >
+                                WS
+                                <span className="pg-vtab-count">{telemetry.gateway.length}</span>
+                            </button>
+                        </div>
+
+                        {rightTab === "channel" ? (
                             <div className="pg-fault-strip" role="group" aria-label="Fault Injection Controls">
-                                {advanced ? (
-                                    <>
-                                        <button
-                                            type="button"
-                                            className="pg-fault-btn"
-                                            data-armed={armedFault === "429" || undefined}
-                                            disabled={!interactive || running}
-                                            onClick={() => triggerFault("429")}
-                                        >
-                                            <LightningIcon size={15} weight="fill" aria-hidden="true" />
-                                            429
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="pg-fault-btn"
-                                            data-armed={armedFault === "403" || undefined}
-                                            disabled={!interactive || running}
-                                            onClick={() => triggerFault("403")}
-                                        >
-                                            403
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="pg-fault-btn"
-                                            disabled={!interactive || running}
-                                            onClick={() => triggerFault("disconnect")}
-                                        >
-                                            <PlugsIcon size={15} weight="bold" aria-hidden="true" />
-                                            Drop WS
-                                        </button>
-                                    </>
-                                ) : (
-                                    activePreset.guidedFault && (
-                                        <button
-                                            type="button"
-                                            className="pg-fault-btn"
-                                            data-armed={armedFault === activePreset.guidedFault.fault || undefined}
-                                            disabled={!interactive || running}
-                                            onClick={() => triggerFault(activePreset.guidedFault!.fault)}
-                                        >
-                                            <LightningIcon size={15} weight="fill" aria-hidden="true" />
-                                            {activePreset.guidedFault.label}
-                                        </button>
-                                    )
+                                <button
+                                    type="button"
+                                    className="pg-fault-btn"
+                                    data-armed={armedFault === "429" || undefined}
+                                    disabled={!interactive || running}
+                                    onClick={() => triggerFault("429")}
+                                >
+                                    <LightningIcon size={15} weight="fill" aria-hidden="true" />
+                                    429
+                                </button>
+                                <button
+                                    type="button"
+                                    className="pg-fault-btn"
+                                    data-armed={armedFault === "403" || undefined}
+                                    disabled={!interactive || running}
+                                    onClick={() => triggerFault("403")}
+                                >
+                                    403
+                                </button>
+                                <button
+                                    type="button"
+                                    className="pg-fault-btn"
+                                    disabled={!interactive || running}
+                                    onClick={() => triggerFault("disconnect")}
+                                >
+                                    <PlugsIcon size={15} weight="bold" aria-hidden="true" />
+                                    Drop WS
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="pg-counters" role="group" aria-label="SDK Diagnostics Counters">
+                                <span>
+                                    <span className="sr-only">Rate-limit 429 waits: </span>
+                                    <span aria-hidden="true">429 </span>
+                                    {telemetry.counters.rateLimitWaits}
+                                </span>
+                                <span>
+                                    <span className="sr-only">Gateway resumes: </span>
+                                    <span aria-hidden="true">Resumes </span>
+                                    {telemetry.counters.resumes}
+                                </span>
+                                {bootMs !== null && (
+                                    <span>
+                                        <span className="sr-only">Sandbox cold boot time: </span>
+                                        <span aria-hidden="true">Boot </span>
+                                        {bootMs} ms
+                                    </span>
                                 )}
                             </div>
-                        </header>
+                        )}
+                    </header>
 
-                        {!advanced && (
+                    <div
+                        className="pg-channel-view"
+                        role="tabpanel"
+                        id={`${baseId}-panel-channel`}
+                        aria-labelledby={`${baseId}-tab-channel`}
+                        hidden={rightTab !== "channel"}
+                    >
+                        <div ref={chatLogRef} className="pg-chat-log" aria-live="polite">
                             <div className="pg-guide-bar">
                                 <span className="pg-guide-label">Try</span>
                                 <span>{activePreset.guide}</span>
                             </div>
-                        )}
-
-                        <div ref={chatLogRef} className="pg-chat-log" aria-live="polite">
                             {chat.length === 0 ? (
                                 <p className="pg-empty">Waiting for the in-memory Fluxer gateway to connect</p>
                             ) : (
@@ -1008,121 +1078,95 @@ export default function Playground() {
                                 Send
                             </button>
                         </form>
-                    </section>
+                    </div>
 
-                    {advanced && (
-                        <section className="pg-pane pg-inspector-pane glass" aria-label="SDK Runtime Inspector">
-                        <header className="pg-pane-head">
-                            <div className="pg-inspector-tabs" role="tablist" aria-label="Inspector Views">
-                                <button
-                                    type="button"
-                                    role="tab"
-                                    className="pg-itab"
-                                    aria-selected={inspectorTab === "logs"}
-                                    onClick={() => setInspectorTab("logs")}
-                                >
-                                    Logs ({consoleEntries.length + telemetry.logs.length})
-                                </button>
-                                <button
-                                    type="button"
-                                    role="tab"
-                                    className="pg-itab"
-                                    aria-selected={inspectorTab === "rest"}
-                                    onClick={() => setInspectorTab("rest")}
-                                >
-                                    REST ({telemetry.requests.length})
-                                </button>
-                                <button
-                                    type="button"
-                                    role="tab"
-                                    className="pg-itab"
-                                    aria-selected={inspectorTab === "gateway"}
-                                    onClick={() => setInspectorTab("gateway")}
-                                >
-                                    WS ({telemetry.gateway.length})
-                                </button>
-                            </div>
-
-                            <div className="pg-counters" aria-label="SDK Diagnostics Counters">
-                                <span aria-label={`Rate-limit 429 waits: ${telemetry.counters.rateLimitWaits}`}>429 {telemetry.counters.rateLimitWaits}</span>
-                                <span aria-label={`Gateway resumes: ${telemetry.counters.resumes}`}>Resumes {telemetry.counters.resumes}</span>
-                                {bootMs !== null && <span aria-label={`Sandbox cold boot time: ${bootMs} milliseconds`}>Boot {bootMs} ms</span>}
-                            </div>
-                        </header>
-
-                        <div className="pg-inspector-body">
-                            {inspectorTab === "logs" && (
-                                <div className="pg-log-list">
-                                    {consoleEntries.map((entry) => (
-                                        <div key={`c-${entry.id}`} className="pg-log-row" data-level={entry.level}>
-                                            <span className="pg-log-tag">console.{entry.level}</span>
-                                            <pre className="pg-log-text">{entry.text}</pre>
-                                        </div>
-                                    ))}
-                                    {telemetry.logs.map((record, index) => (
-                                        <div key={`l-${index}`} className="pg-log-row" data-level={record.level}>
-                                            <span className="pg-log-tag">
-                                                {record.level} · {record.category}
-                                            </span>
-                                            <div className="pg-log-detail">
-                                                <span className="pg-log-code">[{record.code}]</span> {record.message}
-                                                {record.status !== undefined && <span className="pg-log-kv"> status={record.status}</span>}
-                                                {record.delayMs !== undefined && <span className="pg-log-kv"> delay={record.delayMs}ms</span>}
-                                                {record.errorMessage && <div className="pg-log-err">{record.errorName}: {record.errorMessage}</div>}
-                                                {record.errorHint && <div className="pg-log-hint">Hint: {record.errorHint}</div>}
-                                            </div>
-                                        </div>
-                                    ))}
-                                    {consoleEntries.length === 0 && telemetry.logs.length === 0 && (
-                                        <p className="pg-empty">No console output or SDK logs yet</p>
-                                    )}
+                    <div
+                        className="pg-inspector-body"
+                        role="tabpanel"
+                        id={`${baseId}-panel-logs`}
+                        aria-labelledby={`${baseId}-tab-logs`}
+                        hidden={rightTab !== "logs"}
+                    >
+                        <div className="pg-log-list">
+                            {consoleEntries.map((entry) => (
+                                <div key={`c-${entry.id}`} className="pg-log-row" data-level={entry.level}>
+                                    <span className="pg-log-tag">console.{entry.level}</span>
+                                    <pre className="pg-log-text">{entry.text}</pre>
                                 </div>
-                            )}
-
-                            {inspectorTab === "rest" && (
-                                <div className="pg-log-list">
-                                    {telemetry.requests.length === 0 ? (
-                                        <p className="pg-empty">No REST requests sent yet. Send a command in the channel above</p>
-                                    ) : (
-                                        telemetry.requests.map((req) => (
-                                            <div key={req.index} className="pg-log-row" data-level={req.matched ? "warn" : "info"}>
-                                                <span className="pg-log-tag">
-                                                    #{req.index} {req.method}
-                                                </span>
-                                                <div className="pg-log-detail">
-                                                    <span className="pg-log-code">{req.path}</span>
-                                                    {req.matched && <span className="pg-log-kv"> (fault responder)</span>}
-                                                    {req.bodyPreview && <pre className="pg-log-text">{req.bodyPreview}</pre>}
-                                                </div>
-                                            </div>
-                                        ))
-                                    )}
+                            ))}
+                            {telemetry.logs.map((record, index) => (
+                                <div key={`l-${index}`} className="pg-log-row" data-level={record.level}>
+                                    <span className="pg-log-tag">
+                                        {record.level} · {record.category}
+                                    </span>
+                                    <div className="pg-log-detail">
+                                        <span className="pg-log-code">[{record.code}]</span> {record.message}
+                                        {record.status !== undefined && <span className="pg-log-kv"> status={record.status}</span>}
+                                        {record.delayMs !== undefined && <span className="pg-log-kv"> delay={record.delayMs}ms</span>}
+                                        {record.errorMessage && <div className="pg-log-err">{record.errorName}: {record.errorMessage}</div>}
+                                        {record.errorHint && <div className="pg-log-hint">Hint: {record.errorHint}</div>}
+                                    </div>
                                 </div>
-                            )}
-
-                            {inspectorTab === "gateway" && (
-                                <div className="pg-log-list">
-                                    {telemetry.gateway.length === 0 ? (
-                                        <p className="pg-empty">No gateway frames recorded yet</p>
-                                    ) : (
-                                        telemetry.gateway.map((frame) => (
-                                            <div key={frame.index} className="pg-log-row" data-level="info">
-                                                <span className="pg-log-tag">
-                                                    OP {frame.op} · {frame.opName}
-                                                </span>
-                                                <div className="pg-log-detail">
-                                                    {frame.shardId !== null && <span className="pg-log-kv">shard={frame.shardId} </span>}
-                                                    <pre className="pg-log-text">{frame.summary}</pre>
-                                                </div>
-                                            </div>
-                                        ))
-                                    )}
-                                </div>
+                            ))}
+                            {consoleEntries.length === 0 && telemetry.logs.length === 0 && (
+                                <p className="pg-empty">No console output or SDK logs yet</p>
                             )}
                         </div>
-                    </section>
-                    )}
-                </div>
+                    </div>
+
+                    <div
+                        className="pg-inspector-body"
+                        role="tabpanel"
+                        id={`${baseId}-panel-rest`}
+                        aria-labelledby={`${baseId}-tab-rest`}
+                        hidden={rightTab !== "rest"}
+                    >
+                        <div className="pg-log-list">
+                            {telemetry.requests.length === 0 ? (
+                                <p className="pg-empty">No REST requests sent yet. Send a command in the Channel tab</p>
+                            ) : (
+                                telemetry.requests.map((req) => (
+                                    <div key={req.index} className="pg-log-row" data-level={req.matched ? "warn" : "info"}>
+                                        <span className="pg-log-tag">
+                                            #{req.index} {req.method}
+                                        </span>
+                                        <div className="pg-log-detail">
+                                            <span className="pg-log-code">{req.path}</span>
+                                            {req.matched && <span className="pg-log-kv"> (fault responder)</span>}
+                                            {req.bodyPreview && <pre className="pg-log-text">{req.bodyPreview}</pre>}
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+
+                    <div
+                        className="pg-inspector-body"
+                        role="tabpanel"
+                        id={`${baseId}-panel-gateway`}
+                        aria-labelledby={`${baseId}-tab-gateway`}
+                        hidden={rightTab !== "gateway"}
+                    >
+                        <div className="pg-log-list">
+                            {telemetry.gateway.length === 0 ? (
+                                <p className="pg-empty">No gateway frames recorded yet</p>
+                            ) : (
+                                telemetry.gateway.map((frame) => (
+                                    <div key={frame.index} className="pg-log-row" data-level="info">
+                                        <span className="pg-log-tag">
+                                            OP {frame.op} · {frame.opName}
+                                        </span>
+                                        <div className="pg-log-detail">
+                                            {frame.shardId !== null && <span className="pg-log-kv">shard={frame.shardId} </span>}
+                                            <pre className="pg-log-text">{frame.summary}</pre>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                </section>
             </div>
         </div>
     )

@@ -142,19 +142,19 @@ const scenes: { id: string; tab: string; hint: string; icon: IconName; channel: 
 
 const stats = [
     { value: "50+", label: "Built-In Commands" },
-    { value: "25+", label: "Features to Switch On" },
+    { value: "35+", label: "Features to Switch On" },
     { value: "Open", label: "Source, Run It Yourself" },
 ]
 
 const groups: { title: string; text: string; icon: IconName }[] = [
-    { title: "Community", text: "Profiles, showcases, levels, events and birthdays", icon: "star-drop" },
-    { title: "Roles", text: "A role picker or reaction roles, verification, newcomer roles and the member list", icon: "roles-tags" },
-    { title: "Moderation", text: "Cases, automatic rules, raid protection, logs and alerts", icon: "guard-shield" },
-    { title: "Messages", text: "Announcements, greetings, custom replies and message cleanup", icon: "announce-megaphone" },
+    { title: "Community", text: "Profiles, showcases, levels, events with RSVPs, giveaways, boards, counters and reminders", icon: "star-drop" },
+    { title: "Roles", text: "A role picker or reaction roles, verification, newcomer roles, temporary roles and member list order", icon: "roles-tags" },
+    { title: "Moderation", text: "Cases, automatic rules, lockdown, anti-nuke, jail, bot-only staff rights, logs and alerts", icon: "guard-shield" },
+    { title: "Messages", text: "Announcements, greetings, Bluesky, X, YouTube and Twitch feeds, custom replies and cleanup", icon: "announce-megaphone" },
     { title: "Support", text: "Tickets, the help desk and suggestions", icon: "support-lifebuoy" },
-    { title: "Voice", text: "Temporary voice rooms and finding a group", icon: "first-reply-radio" },
-    { title: "Setup", text: "Check NeonFlux, apply presets, see activity and back up the server", icon: "config-sliders" },
-    { title: "Basics", text: "Ping, help, away status, prefix and reply style", icon: "commands-key" },
+    { title: "Voice", text: "Temporary voice rooms and looking for a group", icon: "first-reply-radio" },
+    { title: "Setup", text: "Check NeonFlux, apply presets, see analytics, edit structure and back up the server", icon: "config-sliders" },
+    { title: "Basics", text: "Ping, help, away status, prefix, command rules and reply style", icon: "commands-key" },
 ]
 
 const proofs = [
@@ -337,7 +337,7 @@ const proofs = [
             <li class="dashboard">
                 <img src={iconSrc("data-database", 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
                 <h3>A Dashboard That Stays Live</h3>
-                <p>Forms follow live data, keep unsaved drafts during remote changes, and record configuration changes in the audit log</p>
+                <p>Forms follow live data with quick keyboard search, keep unsaved drafts during remote changes, offer member pages for roles, showcases and profiles, and record configuration changes in the audit log</p>
             </li>
         </ul>
 
