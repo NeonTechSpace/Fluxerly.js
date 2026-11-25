@@ -11,7 +11,7 @@
 // In Immersive they notice the pointer: one close by leans a little toward it and brightens, and
 // as the hero scrolls away they rise a little faster than the page, left behind on the surface.
 
-import { LinearFilter, LinearMipmapLinearFilter, Mesh, NormalBlending, ShaderMaterial, Vector3, type Camera, type PlaneGeometry, type Texture, type TextureLoader } from "three"
+import { LinearFilter, LinearMipmapLinearFilter, Mesh, NormalBlending, ShaderMaterial, Texture, Vector3, type Camera, type PlaneGeometry, type TextureLoader } from "three"
 import { iconSrc, type IconName } from "../lib/art.ts"
 import iconParts from "../lib/icon-parts.json" with { type: "json" }
 import { looks, specs, type CompanionDepth, type Spec } from "./companion-specs.ts"
@@ -89,10 +89,10 @@ const partMaterial = (look: { haze: number; opacity: number }) =>
     })
 
 export interface Companions {
-    // Brings the multi-part icons' parts, one icon at a time, so the page keeps moving while they land. Only the live scene does
+    // Brings the multi-part icons' parts so the page keeps moving while they land. Only the live scene does
     loadParts(loader: TextureLoader): Promise<void>
     readonly under: Readonly<Under>
-    load(loader: TextureLoader, heroHeight: number, pixelRatio: number): Promise<Texture[]>
+    load(loader: TextureLoader, heroHeight: number, pixelRatio: number, heroIcons?: ReadonlyMap<string, HTMLImageElement>): Promise<Texture[]>
     place(layout: HeroLayout, focal: number, restHeight: number): void
     update(time: number, drift: number, dip: number, pointer: Readonly<PointerView>, camera: Camera): void
     dispose(): void
@@ -147,17 +147,37 @@ export function createCompanions(plane: PlaneGeometry, ratios: Record<CompanionD
         meshes: [...items.map((item) => item.mesh), ...partsOf.flat().map((part) => part.mesh)],
         under,
 
-        async load(loader, heroHeight, pixelRatio) {
+        async load(loader, heroHeight, pixelRatio, heroIcons) {
             if (disposed) return []
             // A stacked layout shows none of them, so it doesn't pay for them
             if (window.matchMedia(stackedQuery).matches) {
-                waiting = () => this.load(loader, heroHeight, pixelRatio).then(() => lastPlace?.())
+                waiting = () => this.load(loader, heroHeight, pixelRatio, heroIcons).then(() => lastPlace?.())
                 return []
+            }
+            const reuseDomImage = async (slug: string, targetWidth: 320 | 640): Promise<Texture | null> => {
+                const img = heroIcons?.get(slug)
+                if (!img || img.hidden) return null
+                try {
+                    await img.decode()
+                } catch {
+                    return null
+                }
+                if (img.naturalWidth < 1 || img.naturalHeight < 1) return null
+                // Trimmed art is narrower than its 320/640 box, so check the loaded variant by filename
+                if (targetWidth === 640 && !img.currentSrc.endsWith("-640.webp")) return null
+                const held = document.createElement("canvas")
+                held.width = img.naturalWidth
+                held.height = img.naturalHeight
+                held.getContext("2d")?.drawImage(img, 0, 0)
+                const texture = new Texture(held)
+                texture.needsUpdate = true
+                return texture
             }
             return Promise.all(
                 items.map(async (item) => {
                     const needed = item.spec.size * heroHeight * pixelRatio * 1.15
-                    const texture = await loader.loadAsync(iconSrc(item.spec.slug, needed > smallArt ? 640 : 320))
+                    const targetWidth = needed > smallArt ? 640 : 320
+                    const texture = (await reuseDomImage(item.spec.slug, targetWidth)) ?? (await loader.loadAsync(iconSrc(item.spec.slug, targetWidth)))
                     if (disposed) {
                         texture.dispose()
                         return texture
@@ -202,22 +222,24 @@ export function createCompanions(plane: PlaneGeometry, ratios: Record<CompanionD
                 }
                 return
             }
-            for (const [index, parts] of partsOf.entries()) {
-                if (!parts.length) continue
-                const textures = await Promise.all(parts.map((part) => loader.loadAsync(part.spec.src)))
-                if (disposed) {
-                    for (const texture of textures) texture.dispose()
-                    return
-                }
-                textures.forEach((texture, order) => {
-                    texture.premultiplyAlpha = true
-                    texture.minFilter = LinearMipmapLinearFilter
-                    texture.magFilter = LinearFilter
-                    texture.generateMipmaps = true
-                    parts[order]!.mesh.material.uniforms.uMap!.value = texture
-                })
-                partsFrom[index] = lastTime
-            }
+            await Promise.all(
+                partsOf.map(async (parts, index) => {
+                    if (!parts.length) return
+                    const textures = await Promise.all(parts.map((part) => loader.loadAsync(part.spec.src)))
+                    if (disposed) {
+                        for (const texture of textures) texture.dispose()
+                        return
+                    }
+                    textures.forEach((texture, order) => {
+                        texture.premultiplyAlpha = true
+                        texture.minFilter = LinearMipmapLinearFilter
+                        texture.magFilter = LinearFilter
+                        texture.generateMipmaps = true
+                        parts[order]!.mesh.material.uniforms.uMap!.value = texture
+                    })
+                    partsFrom[index] = lastTime
+                }),
+            )
         },
 
         place(layout, focal, restHeight) {

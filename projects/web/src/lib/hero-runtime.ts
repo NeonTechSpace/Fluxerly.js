@@ -18,8 +18,16 @@ const pictureLimit = 4000
 export function startHero(hero: HTMLElement) {
     const iconsHere = placeSkyIcons(hero)
     watchControlReflections(hero)
+    // Start downloading the scene chunk as soon as the conductor's picture is decoded, in parallel with the
+    // sky icons and first paint, while still waiting for afterPaint before mounting WebGL
+    let preloadedScene: Promise<typeof import("../scene/hero-scene")> | null = null
+    let preloadedFrame: Promise<typeof import("../scene/hero-frame")> | null = null
+    void pictureReady(hero).then(() => {
+        if (getExperience() === "still") preloadedFrame ??= import("../scene/hero-frame")
+        else preloadedScene ??= import("../scene/hero-scene")
+    })
     // The scene's start holds the page up for a moment, so the page gets its first frame with the icons in it first
-    void iconsHere.then(afterPaint).then(() => driveScene(hero))
+    void iconsHere.then(afterPaint).then(() => driveScene(hero, () => preloadedScene, () => preloadedFrame))
 }
 
 // The icons in the sky take the places the scene will draw them in, read from the same numbers, so nothing appears or moves when it takes over
@@ -40,6 +48,7 @@ function placeSkyIcons(hero: HTMLElement): Promise<unknown> {
             const shown = !layout.stacked && (spec.fits?.(layout) ?? true)
             icon.hidden = !shown
             if (!shown) return
+            if (document.documentElement.dataset.iconsHeld === undefined) icon.loading = "eager"
             const [x, y] = spec.place(layout)
             icon.style.height = `${(spec.size * layout.height) / zoom}px`
             icon.style.transform = `translate(${x / zoom}px, ${y / zoom}px) translate(-50%, -50%) rotate(${-spec.tilt[0]}deg)`
@@ -92,7 +101,11 @@ function pictureReady(hero: HTMLElement): Promise<void> {
     return Promise.race([mascot.decode().catch(() => {}), new Promise<void>((resolve) => window.setTimeout(resolve, pictureLimit))])
 }
 
-function driveScene(hero: HTMLElement) {
+function driveScene(
+    hero: HTMLElement,
+    takeScene: () => Promise<typeof import("../scene/hero-scene")> | null,
+    takeFrame: () => Promise<typeof import("../scene/hero-frame")> | null,
+) {
     let scene: HeroScene | null = null
     let still: HeroFrame | null = null
     let sceneModule: Promise<typeof import("../scene/hero-scene")> | null = null
@@ -109,7 +122,7 @@ function driveScene(hero: HTMLElement) {
             if (still) return
             await pictureReady(hero)
             if (ticket !== request) return
-            frameModule ??= import("../scene/hero-frame")
+            frameModule ??= takeFrame() ?? import("../scene/hero-frame")
             try {
                 const module = await frameModule
                 if (ticket !== request) return
@@ -126,7 +139,7 @@ function driveScene(hero: HTMLElement) {
         if (scene) return
         await pictureReady(hero)
         if (ticket !== request) return
-        sceneModule ??= import("../scene/hero-scene")
+        sceneModule ??= takeScene() ?? import("../scene/hero-scene")
         try {
             const module = await sceneModule
             if (ticket !== request) return

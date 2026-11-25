@@ -1,9 +1,10 @@
 ---
+import { ArrowRightIcon } from "@phosphor-icons/react/ssr"
 import CommandChip from "../components/sections/CommandChip.astro"
 import CodePanel from "../components/features/CodePanel.astro"
 import FeaturePage from "../components/features/FeaturePage.astro"
 import Scene from "../components/features/Scene.astro"
-import { guide, initCommand, installCommand } from "../lib/links"
+import { guide, initCommand, installCommand, links } from "../lib/links"
 import starterBot from "../components/features/snippets/starter-bot.js.txt?raw"
 import initTest from "../components/features/snippets/init-bot-test.js.txt?raw"
 import lifetimeBot from "../components/features/snippets/lifetime-bot.js.txt?raw"
@@ -13,6 +14,16 @@ const accent = "cyan"
 
 <FeaturePage slug="first-reply" companion="first-reply-radio" companionAlt="A handheld radio sending signal arcs from its antenna">
     <Fragment slot="title">A Working Bot in <span class="hi">One File</span></Fragment>
+    <Fragment slot="links">
+        <a class="prose-link go-link" href={`${links.playground}#commands`}>
+            Try a Bot in the Playground
+            <ArrowRightIcon size={17} weight="bold" aria-hidden="true" />
+        </a>
+        <a class="prose-link go-link" href={guide("quick-start")}>
+            Quick Start in the Docs
+            <ArrowRightIcon size={17} weight="bold" aria-hidden="true" />
+        </a>
+    </Fragment>
 
     <Scene id="token" step={1} side="left" {accent} guide={guide("create-a-bot")} guideLabel="Create a Bot in the Docs">
         <Fragment slot="title">Create the Bot, Keep Its Token Private</Fragment>

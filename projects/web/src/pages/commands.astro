@@ -1,8 +1,9 @@
 ---
+import { ArrowRightIcon } from "@phosphor-icons/react/ssr"
 import CodePanel from "../components/features/CodePanel.astro"
 import FeaturePage from "../components/features/FeaturePage.astro"
 import Scene from "../components/features/Scene.astro"
-import { guide } from "../lib/links"
+import { guide, links } from "../lib/links"
 import registerCommands from "../components/features/snippets/register-commands.ts.txt?raw"
 import typedArguments from "../components/features/snippets/typed-arguments.ts.txt?raw"
 import guardsCooldowns from "../components/features/snippets/guards-cooldowns.ts.txt?raw"
@@ -14,11 +15,17 @@ const accent = "cyan"
 
 <FeaturePage slug="commands" companion="commands-key" companionAlt="A keycap with a slash cut into it">
     <Fragment slot="title"><span class="hi">Commands</span> with the Plumbing Done</Fragment>
+    <Fragment slot="links">
+        <a class="prose-link go-link" href={`${links.playground}#commands`}>
+            Try Commands in the Playground
+            <ArrowRightIcon size={17} weight="bold" aria-hidden="true" />
+        </a>
+    </Fragment>
 
     <Scene id="register" step={1} side="left" {accent} guide={guide("small-bot")} guideLabel="A Small Bot with Commands">
         <Fragment slot="title">Each Key Is a Command</Fragment>
         <Fragment slot="text">
-            <p>A prefix command is a message that starts with a prefix, such as <code class="inline-code">!ping</code>. Pass your commands to <code class="inline-code">runBot</code>, and its command router reads the name after the prefix and runs the matching <code class="inline-code">execute</code></p>
+            <p>Skip hand-rolled string splitting and switch chains. Pass one commands map to <code class="inline-code">runBot</code>, and its router reads the name after the prefix, runs the matching <code class="inline-code">execute</code> and isolates failures per command</p>
             <p>Return the reply from <code class="inline-code">execute</code>, as here. If it fails, the router reports it with the command's name, and every other command keeps working</p>
         </Fragment>
         <CodePanel file="bot.ts" label="Two commands" code={registerCommands} />

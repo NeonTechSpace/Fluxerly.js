@@ -3,7 +3,7 @@ import { ArrowRightIcon, ArrowUpRightIcon } from "@phosphor-icons/react/ssr"
 import CodePanel from "../components/features/CodePanel.astro"
 import FeaturePage from "../components/features/FeaturePage.astro"
 import Scene from "../components/features/Scene.astro"
-import { effectWebsite, guide } from "../lib/links"
+import { effectWebsite, guide, links } from "../lib/links"
 import oneRequest from "../components/features/snippets/effect-one-request.ts.txt?raw"
 import botEffect from "../components/features/snippets/bot-effect.ts.txt?raw"
 import effectMatch from "../components/features/snippets/effect-match.ts.txt?raw"
@@ -25,6 +25,10 @@ const accent = "violet"
 >
     <Fragment slot="title"><span class="hi">Effect</span>, When You Want It</Fragment>
     <Fragment slot="links">
+        <a class="prose-link go-link" href={`${links.playground}#effect`}>
+            Try Effect in the Playground
+            <ArrowRightIcon size={17} weight="bold" aria-hidden="true" />
+        </a>
         <a class="prose-link go-link" href={guide("effect-first-bot")}>
             First Effect Bot in the Docs
             <ArrowRightIcon size={17} weight="bold" aria-hidden="true" />

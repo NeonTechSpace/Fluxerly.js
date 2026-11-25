@@ -37,6 +37,7 @@ export function guide(slug: GuideSlug, section?: string): string {
 
 export const links = {
     docs: "/docs/",
+    playground: "/playground/",
     apiReference: "/docs/api/",
     github: "https://github.com/NeonTechSpace/Fluxerly.js",
     license: "https://github.com/NeonTechSpace/Fluxerly.js/blob/main/LICENSE",
@@ -68,7 +69,7 @@ export const featurePages = [
     {
         slug: "first-reply",
         title: "A Working Bot in One File",
-        summary: "From an empty folder to a bot that answers, in one file that already reconnects and stops cleanly",
+        summary: "Go from an empty folder to a live Fluxer bot in one file, with reconnects, clean shutdown and clear failure hints built in",
         seoTitle: "Build Your First Fluxer Bot in One File · Fluxerly.js",
         seoDescription: "Start a Fluxer bot in one JavaScript or TypeScript file with runBot. Connects, reconnects, replies to !ping and stops cleanly on Ctrl+C",
         accent: "cyan",
@@ -84,7 +85,7 @@ export const featurePages = [
     {
         slug: "results",
         title: "Read Every Failure",
-        summary: "Requests return a Result to check, and the SDK repeats a write only after a rate limit",
+        summary: "Every request returns a typed Result instead of crashing a handler, with plain fix hints and safe rate-limit retries",
         seoTitle: "Typed Results and Error Handling for Fluxer Bots · Fluxerly.js",
         seoDescription: "Network calls in Fluxerly.js return a Result for expected Fluxer failures, with orThrow when exceptions fit and safe rate-limit retries",
         accent: "violet",
@@ -92,7 +93,7 @@ export const featurePages = [
     {
         slug: "commands",
         title: "Commands with the Plumbing Done",
-        summary: "The router converts arguments, runs guards and cooldowns and builds the help from your definitions",
+        summary: "Define each command once and get typed arguments, permission guards, cooldowns, usage errors and generated help out of the box",
         seoTitle: "Prefix Commands, Arguments and Guards for Fluxer · Fluxerly.js",
         seoDescription: "Built-in Fluxer bot prefix command router with typed arguments, permission guards, cooldowns, command groups and generated help pages",
         accent: "cyan",
@@ -100,7 +101,7 @@ export const featurePages = [
     {
         slug: "logs",
         title: "See What a Bot Is Doing",
-        summary: "Readable records from the first run, with error codes, hints and the token masked",
+        summary: "Know why a bot failed on the first run: Collapsed SDK stacks, exact permission hints, live debug levels and automatic token masking",
         seoTitle: "Structured Logging and Diagnostics for Fluxer Bots · Fluxerly.js",
         seoDescription: "Readable Fluxer bot logs from the first run with stable error codes, action hints, automatic token masking and runtime diagnostics",
         accent: "violet",
@@ -108,7 +109,7 @@ export const featurePages = [
     {
         slug: "testing",
         title: "Tests Without a Token",
-        summary: "A real client against an in-memory Fluxer, so tests run without a token or network access",
+        summary: "Test commands, rate limits, API failures and ten-minute timers in milliseconds against an in-memory Fluxer, with no token or network",
         seoTitle: "Test Fluxer Bots Without a Token or Network · Fluxerly.js",
         seoDescription: "Run real Fluxer bot tests against an in-memory Fluxer gateway and HTTP server with createTestBot, fixtures and a manual test clock",
         accent: "violet",
@@ -116,7 +117,7 @@ export const featurePages = [
     {
         slug: "production",
         title: "A Bot That Stays Up",
-        summary: "Sharding, session resume, a clean shutdown and a restarting supervisor are all in the SDK",
+        summary: "Ship updates without dropping active work: Automatic sharding, session resume across restarts, graceful drain and a built-in supervisor",
         seoTitle: "Sharding, Supervision and Uptime for Fluxer Bots · Fluxerly.js",
         seoDescription: "Operate large Fluxer bots with automatic sharding, session resume across restarts, graceful shutdown, a process supervisor and metrics",
         accent: "cyan",
@@ -132,7 +133,7 @@ export const featurePages = [
     {
         slug: "raw",
         title: "Raw Access, Still Typed",
-        summary: "Typed calls to the routes that accept a bot token and typed raw gateway events, under Fluxer's own field names",
+        summary: "Never wait on an SDK release for a Fluxer feature: Every bot route is typed from OpenAPI and brand-new endpoints still share retries and rate limits",
         seoTitle: "Typed Raw Fluxer REST and Gateway Access · Fluxerly.js",
         seoDescription: "Call any bot-accessible Fluxer HTTP route with typed Fluxer field names through client.rest.call and handle typed raw gateway events",
         accent: "cyan",

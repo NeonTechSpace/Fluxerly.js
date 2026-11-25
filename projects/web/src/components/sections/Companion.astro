@@ -44,7 +44,7 @@ const place = (piece: IconPartSet["pieces"][number]) => {
          so the floating, breathing and drifting never redraw a blur on any frame -->
     {!hollow && <span class="glow" aria-hidden="true"><span class="glow-light"></span></span>}
     <span class="float">
-        <img class="whole" src={iconSrc(name, 640)} alt={alt} width="640" height="640" loading={eager ? "eager" : "lazy"} fetchpriority={eager ? "high" : undefined} decoding="async" />
+        <img class="whole" src={iconSrc(name, 640)} alt={alt} width="640" height="640" loading={eager ? "eager" : "lazy"} fetchpriority={eager ? "high" : "low"} decoding="async" />
         {
             parts && (
                 <span class="parts" aria-hidden="true">

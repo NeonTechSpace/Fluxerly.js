@@ -540,7 +540,12 @@ export function createWorld(hero: HTMLElement): World | null {
             return texture
         }
         const loading = Promise.all([fromHero("[data-mascot]", mascotArt.small), fromHero("[data-waves-glow]", mascotArt.wavesSmall)])
-        const companionsLoading = companions.load(loader, hero.clientHeight, scenePixelRatio())
+        const heroIcons = new Map<string, HTMLImageElement>()
+        for (const img of hero.querySelectorAll<HTMLImageElement>("[data-sky-icon]")) {
+            const slug = img.dataset.skyIcon
+            if (slug) heroIcons.set(slug, img)
+        }
+        const companionsLoading = companions.load(loader, hero.clientHeight, scenePixelRatio(), heroIcons)
         // Companions take their places from where the words end, so wait for the real fonts
         const fonts = document.fonts?.ready.catch(() => {})
         // Shaders compile in the background. The reflection target compiles only what the reflection camera sees

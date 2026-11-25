@@ -31,7 +31,7 @@ if (unknown !== undefined) {
 }
 const started = Date.now()
 const sizes = quick ? screens.filter((screen) => screen.quick) : screens
-const routes = ["/", "/commands/", "/effect/", "/first-reply/", "/docs/", "/docs/commands/", "/docs/api/", "/docs/api/tasks/", "/docs/api/endpoints/", "/docs/codes/", "/does-not-exist/"]
+const routes = ["/", "/commands/", "/effect/", "/first-reply/", "/playground/", "/docs/", "/docs/commands/", "/docs/api/", "/docs/api/tasks/", "/docs/api/endpoints/", "/docs/codes/", "/does-not-exist/"]
 // Every built page, and the missing page's own file
 const builtPages = [
     ...globSync("**/index.html", { cwd: resolve("dist") }).map((file) => {
@@ -131,8 +131,8 @@ const openPage = async ({ width, height, touch, dpr }, mode = "still", tour = fa
     const context = await newContext({ viewport: { width, height }, hasTouch: Boolean(touch), isMobile: Boolean(touch), deviceScaleFactor: dpr ?? 1 })
     const page = await context.newPage()
     page.on("pageerror", (error) => report(`page error: ${error.message.slice(0, 120)}`, `${width}x${height}`))
-    if (mode) await page.addInitScript(([key, value]) => localStorage.setItem(key, value), [experienceKey, mode])
-    if (!tour) await page.addInitScript((key) => localStorage.setItem(key, "1"), tourKey)
+    if (mode) await page.addInitScript(([key, value]) => { try { localStorage.setItem(key, value) } catch {} }, [experienceKey, mode])
+    if (!tour) await page.addInitScript((key) => { try { localStorage.setItem(key, "1") } catch {} }, tourKey)
     return { context, page }
 }
 
@@ -491,8 +491,10 @@ part("water", ["/docs/commands/"], async () => {
     await page.goto(`${site.url}/docs/commands/`, { waitUntil: "load" })
     const clip = await page.evaluate(async () => {
         for (const animation of document.getAnimations()) animation.pause()
-        for (const element of document.querySelectorAll(".docs-main, .ray")) element.style.visibility = "hidden"
         const bubble = document.querySelector('.docs-bubble:has(use[href="#crystal-gold"])')
+        for (const element of document.querySelectorAll(".docs-main, .ray, .docs-bubble")) {
+            if (element !== bubble) element.style.visibility = "hidden"
+        }
         const animation = bubble?.getAnimations()[0]
         if (!animation) return null
         const length = animation.effect.getComputedTiming().duration
@@ -2091,8 +2093,10 @@ serial("docs", ["/docs/"], async () => {
             if (!/^Failed to load Pagefind metadata/.test(error.message)) report(`page error: ${error.message.slice(0, 120)}`, `${size.width}x${size.height}`)
         })
         await page.addInitScript(([key, value, tour]) => {
-            localStorage.setItem(key, value)
-            localStorage.setItem(tour, "1")
+            try {
+                localStorage.setItem(key, value)
+                localStorage.setItem(tour, "1")
+            } catch {}
         }, [experienceKey, "still", tourKey])
         return { context, page }
     }
@@ -2527,8 +2531,10 @@ serial("docs", ["/docs/"], async () => {
             if (!/^Failed to load Pagefind metadata/.test(error.message)) report(`page error: ${error.message.slice(0, 120)}`, `${width}x${height}`)
         })
         await page.addInitScript(([key, value, tour]) => {
-            localStorage.setItem(key, value)
-            localStorage.setItem(tour, "1")
+            try {
+                localStorage.setItem(key, value)
+                localStorage.setItem(tour, "1")
+            } catch {}
         }, [experienceKey, mode, tourKey])
         return { context, page }
     }

@@ -1,9 +1,10 @@
 ---
-import { GithubLogoIcon } from "@phosphor-icons/react/ssr"
+import { GithubLogoIcon, TerminalWindowIcon } from "@phosphor-icons/react/ssr"
 import MotionControl from "./MotionControl.astro"
 import { links } from "../lib/links"
 import DiscoverMenu from "./features/DiscoverMenu.astro"
 import MotionTour from "./MotionTour.astro"
+const current = Astro.url.pathname.replace(/\/$/, "")
 ---
 
 <header class="site-header" data-site-header>
@@ -32,6 +33,10 @@ import MotionTour from "./MotionTour.astro"
     </a>
     <nav class="nav" aria-label="Main">
         <DiscoverMenu />
+        <a class="nav-item" href={links.playground} aria-current={current === "/playground" ? "page" : undefined}>
+            <TerminalWindowIcon className="nav-icon" size={21} aria-hidden="true" />
+            <span class="nav-label">Playground</span>
+        </a>
         <a class="nav-item" href={links.docs}>Docs</a>
         <a class="nav-item" href={links.github} target="_blank" rel="noopener">
             <GithubLogoIcon className="nav-icon" size={22} aria-hidden="true" />
@@ -304,7 +309,8 @@ import MotionTour from "./MotionTour.astro"
         transition: color var(--speed-fast) ease;
     }
 
-    .nav-item:not([aria-disabled="true"]):hover {
+    .nav-item:not([aria-disabled="true"]):hover,
+    .nav-item[aria-current="page"] {
         color: var(--color-ink);
     }
 
@@ -452,12 +458,27 @@ import MotionTour from "./MotionTour.astro"
         /* The narrowest phones have room for the name or the mark beside the whole row of controls, and the name
            is what a new visitor needs */
         @media (max-width: 420px) {
+            .site-header {
+                gap: 6px;
+                padding-inline: 14px;
+            }
+
             .home-mark {
                 display: none;
             }
 
             .home-name {
                 font-size: 21px;
+            }
+
+            .nav,
+            .modes {
+                gap: 2px;
+            }
+
+            .nav-item,
+            .nav :global(.trigger) {
+                min-width: 34px;
             }
         }
 

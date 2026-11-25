@@ -14,6 +14,7 @@ import rehypeExternalLinks from "./src/lib/external-links.mjs"
 import { siteOrigin } from "./src/lib/site-address.mjs"
 import remarkExampleAddresses from "./scripts/docs/remark-example-addresses.mjs"
 import sitemap from "./scripts/sitemap.mjs"
+import playgroundRuntime from "./scripts/playground-runtime.mjs"
 import { buildPeek } from "./src/lib/peek-index.ts"
 import rehypePeek from "./src/lib/rehype-peek.ts"
 import fluxerlyTheme from "./src/styles/shiki-fluxerly.json" with { type: "json" }
@@ -35,7 +36,7 @@ const peekDigest = createHash("sha256")
 export default defineConfig({
     site: siteOrigin,
     output: "static",
-    integrations: [react(), sitemap()],
+    integrations: [react(), sitemap(), playgroundRuntime()],
     markdown: {
         // The guides keep their straight quotes, as code and prose in them are written. Tables of sentences become
         // entries, the names, codes and terms in the prose are marked for their peeks, and inline code wraps only at

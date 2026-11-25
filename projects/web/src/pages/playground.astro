@@ -1,0 +1,104 @@
+---
+import "../styles/features.css"
+import Site from "../layouts/Site.astro"
+import Space from "../components/features/Space.astro"
+import PlaygroundIsland from "../islands/Playground"
+import { guide } from "../lib/links"
+import { featurePageGraph } from "../lib/seo"
+
+const title = "Fluxerly.js SDK Sandbox · Run Bots in the Browser"
+const description =
+    "Edit and run real @neontechspace/fluxerly TypeScript, JavaScript and Effect bots in the browser on createTestBot with live fault injection, logs and wire inspection"
+---
+
+<Site {title} {description} graph={featurePageGraph({ title: "Fluxerly SDK Sandbox", description, path: "/playground/" })}>
+    <Space accent="cyan">
+        <section class="playground-page" aria-labelledby="page-title" data-accent="cyan">
+            <div class="playground-shell">
+                <header class="playground-head">
+                    <h1 class="page-title" id="page-title">
+                        <span class="hi">Fluxerly</span> SDK Sandbox
+                    </h1>
+                    <p class="playground-lead">
+                        Real TypeScript, JavaScript and Effect bots on in-memory createTestBot with zero backend
+                    </p>
+                </header>
+
+                <PlaygroundIsland client:load />
+
+                <noscript>
+                    <div class="playground-noscript glass">
+                        <h2>JavaScript Needed for the SDK Sandbox</h2>
+                        <p>
+                            The interactive Fluxerly SDK sandbox executes real bot code inside an isolated browser iframe with no backend. Enable JavaScript to try it, or jump straight to the written guides
+                        </p>
+                        <div class="playground-noscript-links">
+                            <a class="prose-link" href={guide("quick-start")}>Quick Start Guide</a>
+                            <a class="prose-link" href={guide("testing")}>Testing Without Fluxer</a>
+                            <a class="prose-link" href={guide("commands")}>Commands Guide</a>
+                        </div>
+                    </div>
+                </noscript>
+            </div>
+        </section>
+    </Space>
+</Site>
+
+<style>
+    .playground-page {
+        padding-top: 82px;
+        padding-bottom: 32px;
+    }
+
+    .playground-shell {
+        display: grid;
+        gap: 12px;
+        margin-inline: var(--frame-inline);
+    }
+
+    .playground-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 6px 20px;
+    }
+
+    .playground-head .page-title {
+        --title-scale: clamp(26px, 2.2vw, 34px);
+
+        margin: 0;
+        max-width: none;
+    }
+
+    .playground-lead {
+        margin: 0;
+        font-size: var(--type-small);
+        color: var(--color-muted);
+    }
+
+    .playground-noscript {
+        display: grid;
+        gap: 14px;
+        padding: 24px;
+        border-radius: var(--corner-large);
+        corner-shape: squircle;
+    }
+
+    .playground-noscript h2 {
+        margin: 0;
+        font-size: var(--type-title);
+    }
+
+    .playground-noscript p {
+        margin: 0;
+        font-size: var(--type-body);
+        color: var(--color-muted);
+    }
+
+    .playground-noscript-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px 28px;
+    }
+</style>

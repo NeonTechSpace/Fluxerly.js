@@ -42,6 +42,7 @@ const place = top !== undefined ? `top: ${top}` : `bottom: ${bottom ?? "0px"}`
     height={size.height}
     alt=""
     loading="lazy"
+    fetchpriority="low"
     decoding="async"
     data-side={side}
     data-soft={size.soft ? "" : undefined}

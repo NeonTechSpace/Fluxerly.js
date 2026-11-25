@@ -42,7 +42,7 @@ const marks = {
                     <li>
                         <a href={`/${page.slug}/`} data-accent={page.accent} aria-current={current === `/${page.slug}` ? "page" : undefined}>
                             <span class="mark" aria-hidden="true">
-                                <img src={iconSrc(marks[page.slug].icon, 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
+                                <img src={iconSrc(marks[page.slug].icon, 160)} alt="" width="160" height="160" loading="lazy" fetchpriority="low" decoding="async" />
                             </span>
                             <span class="text">
                                 <span class="title">
@@ -442,11 +442,25 @@ const marks = {
 
     /* On a phone the button shows its compass with the word kept for assistive technology, and the panel becomes a
        sheet across nearly the whole width under the header, so every name and line keeps to one line */
-    /* Between a phone's sheet and a wide screen the button sits too far right for the panel to open rightward */
+    /* Between a phone's sheet and a wide screen the button sits too far right for the panel to open rightward, and
+       with Playground beside Discover a button-anchored right edge can push the panel past the left edge on foldables */
     @media (min-width: 641px) and (max-width: 1500px) {
+        .discover {
+            position: static;
+        }
+
         .panel {
+            top: calc(100% - 6px);
             left: auto;
-            right: -10px;
+            right: var(--frame-inline);
+        }
+
+        .bridge {
+            top: 52px;
+            left: auto;
+            right: var(--frame-inline);
+            width: min(440px, calc(100vw - 2 * var(--page-margin)));
+            height: 24px;
         }
     }
 

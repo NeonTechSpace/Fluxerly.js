@@ -70,7 +70,7 @@ const place = (b: ArtBox) =>
             {
                 specs.map((spec) => (
                     <img
-                        data-sky-icon
+                        data-sky-icon={spec.slug}
                         hidden
                         loading="lazy"
                         src={iconSrc(spec.slug, 320)}
@@ -98,6 +98,7 @@ const place = (b: ArtBox) =>
                     sizes={mascotSizes}
                     width={mascotArt.width}
                     height={mascotArt.height}
+                    fetchpriority="high"
                     alt=""
                     data-mascot
                 />

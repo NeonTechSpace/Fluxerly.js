@@ -44,6 +44,7 @@ const outsideWebsite = (path) => {
 
 const unseen = [
     /^projects\/web\/tests\//,
+    /^projects\/web\/functions\//,
     /^projects\/web\/(?!content\/)(.*\/)?[^/]+\.md$/,
     /^projects\/web\/scripts\/checks\/(design-scores\.json|look\.mjs|search\.mjs|versions\.mjs)$/,
 ]
