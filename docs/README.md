@@ -73,9 +73,16 @@ Every `@neontechspace/fluxerly` install ships the `fluxerly` CLI with zero extra
 
 ### Diagnose project setup offline with `fluxerly doctor`
 
-Run `npx --no fluxerly doctor` (or `pnpm exec fluxerly doctor`, `bunx --no-install fluxerly doctor`) to catch configuration mistakes before a bot ever connects. The check runs completely offline without contacting Fluxer or printing token values, inspecting Node.js `>=26.13.0`, ESM `"type": "module"`, `tsconfig.json`, TypeScript 7, `@types/node`, Effect 4 peer alignment, installed `node_modules` drift, forbidden CommonJS `require()` or deep `/dist/` or `/src/` imports, `AGENTS.md` freshness, `.gitignore` rules and `.env` token prefix mistakes (`Bot ` or `Bearer `)
+Catch setup and hygiene mistakes before a bot ever connects, with an exact fix printed for every warning or failure
 
-Every warning or failure prints an exact fix, and `--json` emits structured results for CI or scripts
+```sh
+npx --no fluxerly doctor
+```
+
+- **Runtime and modules:** Checks Node.js `>=26.13.0`, ESM `"type": "module"`, `tsconfig.json`, TypeScript 7, `@types/node` and Effect 4 peer alignment
+- **Code and agent hygiene:** Flags installed `node_modules` drift, blocked `require()` or deep `/dist/` and `/src/` imports, and outdated `AGENTS.md` rules
+- **Secret safety:** Runs completely offline without contacting Fluxer or printing token values, while catching `.gitignore` gaps and extra `Bot` or `Bearer` prefixes in `.env`
+- **Works everywhere:** Run with `pnpm exec fluxerly doctor` or `bunx --no-install fluxerly doctor`, and pass `--json` for CI scripts
 
 <p align="center">
   <img src="/docs/assets/doctor.webp" width="720" alt="Terminal running npx --no fluxerly doctor, catching an outdated AGENTS.md warning and a Bot token prefix failure with exact fixes, then re-running after the fixes to show all 7 checks passing">
@@ -83,9 +90,16 @@ Every warning or failure prints an exact fix, and `--json` emits structured resu
 
 ### Root-cause bot and SDK issues with `fluxerly triage`
 
-Run `npx --no fluxerly triage` when startup fails, the gateway drops, an API call rejects unexpectedly or the SDK itself appears wrong. The command gathers redacted static environment facts (CLI version, installed SDK version, pinned Fluxer server commit, shipped `src/` path and `fluxerly doctor` results), optionally attaches a redacted tail from `--log <file>` or captures a live `FLUXERLY_DEBUG=rest,gateway` trace with `--run <command>`, and starts Claude Code, Codex or Antigravity with Fluxerly's bundled triage playbook. Pass `--print` to output the redacted playbook and context for any other coding agent
+When startup fails, the gateway drops or an API call rejects unexpectedly, bundle redacted project facts and trace the root cause with a coding agent
 
-Grounded in the TypeScript source shipped inside `node_modules/@neontechspace/fluxerly/src`, the session separates three fault layers before proposing action: Bot code or setup, Fluxer account or permissions, or an SDK defect or Fluxer parity gap confirmed with a minimal `createTestBot` reproduction. Secrets in `.env` are never read, tokens and home paths are masked automatically, and no file edit or GitHub issue is performed without explicit confirmation
+```sh
+npx --no fluxerly triage --run "npm test" "replies fail with 403"
+```
+
+- **Automatic context:** Collects SDK and CLI versions, pinned Fluxer server commit, shipped `src/` paths and `doctor` results, plus optional `--log` tails or live `FLUXERLY_DEBUG=rest,gateway` traces from `--run`
+- **Three fault layers:** Reads shipped TypeScript source inside `node_modules/@neontechspace/fluxerly/src` and verifies with `createTestBot` to separate bot code, Fluxer permissions and real SDK bugs
+- **Any coding agent:** Launches Claude Code, Codex or Antigravity in a terminal, or prints the full redacted brief with `--print` for any agent or chat session
+- **Safe by default:** Never reads `.env`, masks tokens and home paths automatically, and asks before editing files or opening an issue
 
 <p align="center">
   <img src="/docs/assets/triage.webp" width="720" alt="Terminal running npx --no fluxerly triage with --run trace capture and the agent picker alongside a triage session panel showing redacted context, shipped source tracing, createTestBot verification and a proven permissions verdict">
@@ -131,7 +145,13 @@ Fluxerly is tested against Node.js 26.13 or newer. JavaScript needs no compiler,
 
 A bot needs a Fluxer application, its bot token and an invite to a community. [Create a bot](https://fluxerly.neontechspace.com/docs/create-a-bot/) walks through setup and permissions
 
-Generate a starter project with a working test using `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init`, then pick JavaScript, TypeScript or Effect in the interactive menu. Pass `--template js`, `--template ts` or `--template effect` to skip the prompt, `--dir <folder>` to target a new directory, `--pm npm|pnpm|bun` to override the package manager or `--no-install` for offline setups. Existing `.env` files are preserved, and missing `node_modules` and `.env` entries are appended to an existing `.gitignore`. The [quick start](https://fluxerly.neontechspace.com/docs/quick-start/) also sets up the same project by hand
+```sh
+npx @neontechspace/fluxerly init
+```
+
+- **Interactive setup:** Pick JavaScript, TypeScript or Effect from the menu (also works with `pnpm dlx` or `bunx`), or follow the [quick start](https://fluxerly.neontechspace.com/docs/quick-start/) by hand
+- **Flags for scripts:** Pass `--template js|ts|effect`, `--dir <folder>`, `--pm npm|pnpm|bun` or `--no-install` to skip prompts or installs
+- **Safe on existing folders:** Keeps existing `.env` files intact and appends missing `node_modules` and `.env` lines to `.gitignore`
 
 The generated `bot.js` replies **Pong!** to **!ping**:
 
