@@ -1,5 +1,11 @@
 # @neontechspace/fluxerly
 
+## 1003.1.0
+
+### Minor Changes
+
+- 9afefac: Add pinned Fluxer server commit metadata, opt-in `--run "<command>"` debug trace capture, OpenCode and T3 Code launcher support, and a harness-agnostic `other` selection fallback to `fluxerly triage`
+
 ## 1003.0.0
 
 ### Major Changes
