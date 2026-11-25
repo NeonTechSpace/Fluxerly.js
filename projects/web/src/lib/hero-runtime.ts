@@ -22,23 +22,47 @@ export function startHero(hero: HTMLElement) {
     // sky icons and first paint, while still waiting for afterPaint before mounting WebGL
     let preloadedScene: Promise<typeof import("../scene/hero-scene")> | null = null
     let preloadedFrame: Promise<typeof import("../scene/hero-frame")> | null = null
+    const preload = <T,>(load: () => Promise<T>, clear: () => void): Promise<T> => {
+        const promise = load()
+        void promise.catch(clear)
+        return promise
+    }
     void pictureReady(hero).then(() => {
-        if (getExperience() === "still") preloadedFrame ??= import("../scene/hero-frame")
-        else preloadedScene ??= import("../scene/hero-scene")
+        if (getExperience() === "still") {
+            preloadedFrame ??= preload(() => import("../scene/hero-frame"), () => {
+                preloadedFrame = null
+            })
+        } else {
+            preloadedScene ??= preload(() => import("../scene/hero-scene"), () => {
+                preloadedScene = null
+            })
+        }
     })
+    const takeScene = () => {
+        const next = preloadedScene
+        preloadedScene = null
+        return next
+    }
+    const takeFrame = () => {
+        const next = preloadedFrame
+        preloadedFrame = null
+        return next
+    }
     // The scene's start holds the page up for a moment, so the page gets its first frame with the icons in it first
-    void iconsHere.then(afterPaint).then(() => driveScene(hero, () => preloadedScene, () => preloadedFrame))
+    void iconsHere.then(afterPaint).then(() => driveScene(hero, takeScene, takeFrame))
 }
 
 // The icons in the sky take the places the scene will draw them in, read from the same numbers, so nothing appears or moves when it takes over
-function placeSkyIcons(hero: HTMLElement): Promise<unknown> {
+async function placeSkyIcons(hero: HTMLElement): Promise<void> {
     const box = hero.querySelector<HTMLElement>(".sky-icons")
     const icons = [...hero.querySelectorAll<HTMLImageElement>("[data-sky-icon]")]
     const parts = findHeroParts(hero)
-    const lift = () => delete document.documentElement.dataset.iconsWait
+    const lift = () => {
+        delete document.documentElement.dataset.iconsWait
+    }
     if (!box || !parts) {
         lift()
-        return Promise.resolve()
+        return
     }
     const place = () => {
         const layout = measureHero(hero, parts)
@@ -72,7 +96,8 @@ function placeSkyIcons(hero: HTMLElement): Promise<unknown> {
             // Storage is blocked, so the next visit counts as a first one
         }
     })
-    return Promise.race([decoded, new Promise((done) => window.setTimeout(done, iconLimit))]).then(lift)
+    await Promise.race([decoded, new Promise<void>((done) => window.setTimeout(done, iconLimit))])
+    lift()
 }
 
 const afterPaint = () => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))

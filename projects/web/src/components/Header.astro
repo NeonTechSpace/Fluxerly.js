@@ -436,10 +436,18 @@ const current = Astro.url.pathname.replace(/\/$/, "")
         transition: visibility 0ms linear;
     }
 
+    /* Compact header height on laptops and shorter screens to keep more content above the fold */
+    @media (max-width: 1440px), (max-height: 820px) {
+        .site-header {
+            height: 62px;
+        }
+    }
+
     /* A phone keeps one row. Discover shows its compass, GitHub its mark, and the words stay as the controls' names.
        Every control is at least 44 px tall for a finger */
     @media (max-width: 640px) {
         .site-header {
+            height: 58px;
             gap: 8px;
         }
 
@@ -453,39 +461,6 @@ const current = Astro.url.pathname.replace(/\/$/, "")
 
         .home-name {
             font-size: 22px;
-        }
-
-        /* The narrowest phones have room for the name or the mark beside the whole row of controls, and the name
-           is what a new visitor needs */
-        @media (max-width: 420px) {
-            .site-header {
-                gap: 6px;
-                padding-inline: 14px;
-            }
-
-            .home-mark {
-                display: none;
-            }
-
-            .home-name {
-                font-size: 21px;
-            }
-
-            .nav,
-            .modes {
-                gap: 2px;
-            }
-
-            .nav-item,
-            .nav :global(.trigger) {
-                min-width: 34px;
-            }
-        }
-
-        @media (max-width: 340px) {
-            .home-name {
-                font-size: 18px;
-            }
         }
 
         /* The touch areas are wider than what they show, so the gaps between them can stay small */
@@ -525,6 +500,48 @@ const current = Astro.url.pathname.replace(/\/$/, "")
 
         .modes :global(.motion) {
             position: relative;
+        }
+
+        /* The narrowest phones have room for the name or the mark beside the whole row of controls, and the name
+           is what a new visitor needs */
+        @media (max-width: 420px) {
+            .site-header {
+                gap: 6px;
+                padding-inline: 14px;
+            }
+
+            .home-mark {
+                display: none;
+            }
+
+            .home-name {
+                font-size: 21px;
+            }
+
+            .nav,
+            .modes {
+                gap: 2px;
+            }
+
+            .nav-item,
+            .nav :global(.trigger) {
+                min-width: 34px;
+            }
+        }
+
+        @media (max-width: 340px) {
+            .site-header {
+                padding-inline: 12px;
+            }
+
+            .home-name {
+                font-size: 18px;
+            }
+
+            .nav-item,
+            .nav :global(.trigger) {
+                min-width: 32px;
+            }
         }
     }
 

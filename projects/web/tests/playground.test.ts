@@ -13,14 +13,15 @@ async function startSandboxVm() {
 
     const nextMessage = (type: string, timeoutMs = 8000): Promise<Record<string, unknown>> =>
         new Promise((resolve, reject) => {
-            const timer = setTimeout(
-                () => reject(new Error(`Timed out waiting for "${type}" (seen: ${messages.map((m) => String(m.type)).join(", ")})`)),
-                timeoutMs,
-            )
+            const timer = setTimeout(() => {
+                wake = undefined
+                reject(new Error(`Timed out waiting for "${type}" (seen: ${messages.map((m) => String(m.type)).join(", ")})`))
+            }, timeoutMs)
             const poll = () => {
                 const index = messages.findIndex((item) => item.type === type)
                 if (index >= 0) {
                     clearTimeout(timer)
+                    wake = undefined
                     resolve(messages.splice(index, 1)[0]!)
                     return true
                 }
@@ -138,6 +139,95 @@ test("real browser Fluxerly SDK runtime boots and executes every playground pres
         const afterDisconnect = await sandbox.nextMessage("faultResult")
         assert.equal(afterDisconnect.ok, true)
         assert.equal(((afterDisconnect.telemetry as { counters: { resumes: number } }).counters).resumes, 1)
+
+        // Fault arming replaces any earlier armed fault instead of stacking
+        sandbox.send({ type: "fault", requestId: reqSeq++, fault: "429" })
+        assert.equal((await sandbox.nextMessage("faultResult")).ok, true)
+        sandbox.send({ type: "fault", requestId: reqSeq++, fault: "403" })
+        assert.equal((await sandbox.nextMessage("faultResult")).ok, true)
+        sandbox.send({ type: "say", requestId: reqSeq++, content: "!ping" })
+        const replacedFault = await sandbox.nextMessage("sayResult")
+        assert.equal(replacedFault.ok, true)
+        assert.equal((replacedFault.replies as unknown[]).length, 0)
+        // Next message succeeds cleanly without hitting the earlier 429 responder
+        const waitsBefore = ((replacedFault.telemetry as { counters: { rateLimitWaits: number } }).counters).rateLimitWaits
+        sandbox.send({ type: "say", requestId: reqSeq++, content: "!ping" })
+        const afterClean = await sandbox.nextMessage("sayResult")
+        assert.equal((afterClean.replies as unknown[]).length, 1)
+        assert.equal(((afterClean.telemetry as { counters: { rateLimitWaits: number } }).counters).rateLimitWaits, waitsBefore)
+
+        // Overlapping runs: slower Run 1 cannot overwrite faster Run 2 after Run 2 succeeds
+        const slowRunId = runSeq++
+        const fastRunId = runSeq++
+        sandbox.send({
+            type: "run",
+            runId: slowRunId,
+            mode: "default",
+            code: `import { defineBot } from "@neontechspace/fluxerly"
+await new Promise((resolve) => setTimeout(resolve, 90))
+export default defineBot({ commands: { prefix: "!", commands: { ping: { execute: ({ reply }) => reply("Older reply") } } } })`,
+        })
+        sandbox.send({
+            type: "run",
+            runId: fastRunId,
+            mode: "default",
+            code: `import { defineBot } from "@neontechspace/fluxerly"
+export default defineBot({ commands: { prefix: "!", commands: { ping: { execute: ({ reply }) => reply("Newer reply") } } } })`,
+        })
+        const fastResult = await sandbox.nextMessage("runResult")
+        assert.equal(fastResult.runId, fastRunId)
+        assert.equal(fastResult.ok, true)
+        await new Promise((resolve) => setTimeout(resolve, 160))
+        sandbox.send({ type: "say", requestId: reqSeq++, content: "!ping" })
+        const raceReply = await sandbox.nextMessage("sayResult")
+        assert.equal(raceReply.ok, true)
+        assert.equal((raceReply.replies as { content: string }[])[0]?.content, "Newer reply")
+
+        // SDK masking and error inspection work with node:util types/inspect.custom shims and console output stays bounded
+        sandbox.messages.length = 0
+        sandbox.send({
+            type: "run",
+            runId: runSeq++,
+            mode: "default",
+            code: `import { defineBot, describeError } from "@neontechspace/fluxerly"
+const err = new Error("failed", { cause: { token: "secret-123", boxed: new String("boxed"), wm: new WeakMap() } })
+const summary = describeError(err)
+for (let index = 0; index < 140; index++) console.log("line", index)
+export default defineBot({ commands: { prefix: "!", commands: { ping: { execute: ({ reply }) => reply(summary) } } } })`,
+        })
+        const maskRun = await sandbox.nextMessage("runResult")
+        assert.equal(maskRun.ok, true, `Masking/console test failed: ${JSON.stringify(maskRun.error)}`)
+        sandbox.send({ type: "say", requestId: reqSeq++, content: "!ping" })
+        const maskReply = await sandbox.nextMessage("sayResult")
+        assert.equal(maskReply.ok, true)
+        const summaryText = (maskReply.replies as { content: string }[])[0]?.content ?? ""
+        assert.ok(summaryText.includes("failed"), `Expected error summary, got: ${summaryText}`)
+        assert.ok(!summaryText.includes("secret-123"), `Expected secret masked, got: ${summaryText}`)
+        assert.ok(!summaryText.includes("isStringObject"), `Unexpected node:util shim error: ${summaryText}`)
+        const consoleMessages = sandbox.messages.filter((item) => item.type === "console")
+        assert.equal(consoleMessages.length, 101)
+        assert.equal(consoleMessages[0]!.runId, maskRun.runId)
+        assert.match(String((consoleMessages[100]!.entry as { text: string }).text), /truncated after 100 lines/i)
+
+        // Interrupting an in-flight say (during 429 retry wait) with a new run completes cleanly without throwing
+        sandbox.send({ type: "fault", requestId: reqSeq++, fault: "429" })
+        assert.equal((await sandbox.nextMessage("faultResult")).ok, true)
+        sandbox.send({ type: "say", requestId: reqSeq++, content: "!ping" })
+        const interruptRunId = runSeq++
+        sandbox.send({
+            type: "run",
+            runId: interruptRunId,
+            mode: "default",
+            code: `import { defineBot } from "@neontechspace/fluxerly"
+export default defineBot({ commands: { prefix: "!", commands: { ping: { execute: ({ reply }) => reply("Fresh bot") } } } })`,
+        })
+        const interruptResult = await sandbox.nextMessage("runResult")
+        assert.equal(interruptResult.runId, interruptRunId)
+        assert.equal(interruptResult.ok, true)
+        sandbox.send({ type: "say", requestId: reqSeq++, content: "!ping" })
+        const freshReply = await sandbox.nextMessage("sayResult")
+        assert.equal(freshReply.ok, true)
+        assert.equal((freshReply.replies as { content: string }[])[0]?.content, "Fresh bot")
     } finally {
         await sandbox.close()
     }

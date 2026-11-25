@@ -49,7 +49,22 @@ export function isDeepStrictEqual(left: unknown, right: unknown): boolean {
     return deepEqual(left, right, new WeakMap())
 }
 
-export function inspect(value: unknown, options?: { readonly depth?: number }): string {
+const inspectCustom = Symbol.for("nodejs.util.inspect.custom")
+
+const inspectDefaultOptions = {
+    depth: 2,
+    colors: false,
+    showHidden: false,
+    maxArrayLength: 100,
+    maxStringLength: 10_000,
+    breakLength: 80,
+    compact: 3,
+    sorted: false,
+    getters: false,
+    numericSeparator: false,
+}
+
+function inspectImpl(value: unknown, options?: { readonly depth?: number }): string {
     const maxDepth = options?.depth ?? 4
     const seen = new WeakSet<object>()
     const format = (item: unknown, depth: number): string => {
@@ -61,10 +76,25 @@ export function inspect(value: unknown, options?: { readonly depth?: number }): 
         if (typeof item === "symbol") return item.toString()
         if (typeof item === "function") return `[Function${item.name ? `: ${item.name}` : ""}]`
         if (typeof item !== "object") return ""
+        if (seen.has(item)) return "[Circular]"
+        const customFn = (item as Record<symbol, unknown>)[inspectCustom]
+        if (typeof customFn === "function") {
+            seen.add(item)
+            try {
+                const customResult = (customFn as (d: number, opts: typeof inspectDefaultOptions, fn: typeof inspectImpl) => unknown).call(
+                    item,
+                    Math.max(0, maxDepth - depth),
+                    { ...inspectDefaultOptions, depth: Math.max(0, maxDepth - depth) },
+                    inspectImpl,
+                )
+                return typeof customResult === "string" ? customResult : format(customResult, depth + 1)
+            } catch {
+                return "[Object]"
+            }
+        }
         if (item instanceof Error) return `${item.name}: ${item.message}`
         if (item instanceof Date) return item.toISOString()
         if (item instanceof RegExp) return item.toString()
-        if (seen.has(item)) return "[Circular]"
         if (depth >= maxDepth) return Array.isArray(item) ? "[Array]" : "[Object]"
         seen.add(item)
         if (Array.isArray(item)) return `[ ${item.map((entry) => format(entry, depth + 1)).join(", ")} ]`
@@ -77,6 +107,13 @@ export function inspect(value: unknown, options?: { readonly depth?: number }): 
     return format(value, 0)
 }
 
+export const inspect = Object.assign(inspectImpl, {
+    custom: inspectCustom,
+    defaultOptions: inspectDefaultOptions,
+})
+
+const objectTag = (value: unknown): string => Object.prototype.toString.call(value)
+
 export const types = {
     isPromise: (value: unknown): value is Promise<unknown> => value instanceof Promise,
     isNativeError: (value: unknown): value is Error => value instanceof Error,
@@ -84,6 +121,13 @@ export const types = {
     isRegExp: (value: unknown): value is RegExp => value instanceof RegExp,
     isMap: (value: unknown): value is Map<unknown, unknown> => value instanceof Map,
     isSet: (value: unknown): value is Set<unknown> => value instanceof Set,
+    isWeakMap: (value: unknown): value is WeakMap<WeakKey, unknown> => value instanceof WeakMap,
+    isWeakSet: (value: unknown): value is WeakSet<WeakKey> => value instanceof WeakSet,
+    isStringObject: (value: unknown): boolean => typeof value === "object" && value !== null && objectTag(value) === "[object String]",
+    isNumberObject: (value: unknown): boolean => typeof value === "object" && value !== null && objectTag(value) === "[object Number]",
+    isBooleanObject: (value: unknown): boolean => typeof value === "object" && value !== null && objectTag(value) === "[object Boolean]",
+    isBigIntObject: (value: unknown): boolean => typeof value === "object" && value !== null && objectTag(value) === "[object BigInt]",
+    isSymbolObject: (value: unknown): boolean => typeof value === "object" && value !== null && objectTag(value) === "[object Symbol]",
     isUint8Array: (value: unknown): value is Uint8Array => value instanceof Uint8Array,
     isArrayBufferView: (value: unknown): value is ArrayBufferView => ArrayBuffer.isView(value),
     isAnyArrayBuffer: (value: unknown): value is ArrayBuffer => value instanceof ArrayBuffer,

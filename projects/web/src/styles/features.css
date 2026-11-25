@@ -128,6 +128,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: 14px 32px;
+    max-width: 44ch;
     margin-top: 30px;
 }
 
@@ -449,5 +450,44 @@
 @media (min-width: 1800px) and (max-aspect-ratio: 4/5) {
     .feature-hero .scope {
         width: 480px;
+    }
+}
+
+/* Laptops and shorter screens tighten top padding and section margins so the hero and first scene share the viewport */
+@media (max-width: 1440px), (max-height: 820px) {
+    .feature-hero {
+        --hero-top: clamp(92px, 6.8vw, 124px);
+    }
+
+    .feature-hero .hero-line {
+        margin-top: 16px;
+    }
+
+    .feature-hero .hero-links {
+        gap: 10px 26px;
+        margin-top: 18px;
+    }
+
+    .feature-hero + .scene {
+        margin-top: clamp(42px, 3.8vw, 64px);
+    }
+
+    .scene .step {
+        margin-bottom: 12px;
+    }
+
+    .scene-text p {
+        margin-top: 14px;
+    }
+
+    .scene .point,
+    .scene .go-link {
+        margin-top: 18px;
+    }
+}
+
+@media (max-width: 899px) {
+    .feature-hero {
+        --hero-top: 78px;
     }
 }

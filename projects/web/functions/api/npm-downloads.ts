@@ -72,6 +72,14 @@ function readCopy(value: unknown): Copy | undefined {
 }
 
 // KV and the edge cache are helpers to this answer. When either one fails, the request goes on without it
+async function readEdge(edge: EdgeCache | undefined, key: Request) {
+    try {
+        return edge ? await edge.match(key) : undefined
+    } catch (error) {
+        console.error("The npm downloads answer could not be read from the edge cache", error)
+    }
+}
+
 async function readKv(kv: Kv | undefined) {
     try {
         return kv ? readCopy(await kv.get(kvKey, "json")) : undefined
@@ -89,10 +97,10 @@ async function writeKv(kv: Kv | undefined, copy: Copy) {
 }
 
 // The entry lives for the given time, which the edge cache takes from the entry's own Cache-Control
-async function cachePut(edge: EdgeCache, key: Request, copy: Copy, lifetimeMs: number) {
+async function cachePut(edge: EdgeCache | undefined, key: Request, copy: Copy, lifetimeMs: number) {
     const headers = { ...json, "cache-control": `public, max-age=${cacheSeconds(lifetimeMs)}`, [staleAtHeader]: String(nextRefresh(copy.fetchedAt)) }
     try {
-        await edge.put(key, new Response(JSON.stringify(copy.history), { headers }))
+        await edge?.put(key, new Response(JSON.stringify(copy.history), { headers }))
     } catch (error) {
         console.error("The npm downloads answer could not be cached", error)
     }
@@ -104,12 +112,22 @@ const nextRefresh = (time: number) => Math.floor((time - 4 * hourMs) / dayMs) * 
 // How long a copy has left before the first 04:00 UTC after it was fetched. Every location counts to the same moment
 const timeLeft = (copy: Copy) => nextRefresh(copy.fetchedAt) - Date.now()
 
-// Asks npm, and keeps the answer only once it has passed the same check the chart applies
-async function fetchCopy(kv: Kv | undefined): Promise<Copy> {
-    const history = await fetchNpmHistory((url, init) => fetch(url, init), Date.now())
-    const copy = { fetchedAt: Date.now(), history }
-    await writeKv(kv, copy)
-    return copy
+let inflightRefresh: Promise<Copy> | undefined
+let inflightStaleRefresh: Promise<void> | undefined
+
+// Asks npm, coalescing concurrent misses inside the same isolate so npm and KV are hit once
+function fetchCopy(kv: Kv | undefined): Promise<Copy> {
+    if (!inflightRefresh) {
+        inflightRefresh = (async () => {
+            const history = await fetchNpmHistory((url, init) => fetch(url, init), Date.now())
+            const copy = { fetchedAt: Date.now(), history }
+            await writeKv(kv, copy)
+            return copy
+        })().finally(() => {
+            inflightRefresh = undefined
+        })
+    }
+    return inflightRefresh
 }
 
 // The snapshot's history and the time this deployment's build fetched it
@@ -128,13 +146,13 @@ export async function answerDownloads(context: Context, built: Copy | undefined)
         return new Response("Method not allowed", { status: 405, headers: { allow: "GET, HEAD", "cache-control": "no-store" } })
     }
 
-    const edge = (caches as unknown as { default: EdgeCache }).default
+    const edge = (caches as unknown as { default?: EdgeCache } | undefined)?.default
     // Every request for this path shares one entry, whatever its method or query string, and a new deployment starts a new one
     const url = new URL(request.url)
     url.search = built ? `?built=${built.fetchedAt}` : ""
     const key = new Request(url)
 
-    const hit = await edge.match(key)
+    const hit = await readEdge(edge, key)
     if (hit) return answer(request, await hit.text(), Number(hit.headers.get(staleAtHeader)))
 
     const kv = env.NPM_DOWNLOADS
@@ -145,9 +163,9 @@ export async function answerDownloads(context: Context, built: Copy | undefined)
         if (left > 0) {
             context.waitUntil(cachePut(edge, key, stored, left))
         } else {
-            // Past its 04:00 UTC: served as it is, while this location asks npm for the next copy
-            context.waitUntil(
-                (async () => {
+            // Past its 04:00 UTC: served as it is, while this isolate runs one shared background refresh
+            if (!inflightStaleRefresh) {
+                inflightStaleRefresh = (async () => {
                     await cachePut(edge, key, stored, shortestCacheMs)
                     try {
                         const next = await fetchCopy(kv)
@@ -156,8 +174,11 @@ export async function answerDownloads(context: Context, built: Copy | undefined)
                         console.error("npm could not be asked for the download counts, the older copy stays for now", error)
                         await cachePut(edge, key, stored, retryMs)
                     }
-                })(),
-            )
+                })().finally(() => {
+                    inflightStaleRefresh = undefined
+                })
+            }
+            context.waitUntil(inflightStaleRefresh)
         }
         return answer(request, JSON.stringify(stored.history), nextRefresh(stored.fetchedAt))
     }

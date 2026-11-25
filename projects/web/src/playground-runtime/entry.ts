@@ -67,31 +67,63 @@ interface ActiveBotHandle {
     readonly botName: string
     readonly canSay: boolean
     readonly rest: DefaultTestBot["rest"]
+    totalSendCount(): number
     say(content: string): Promise<readonly SandboxBotReply[]>
     disconnect(): Promise<void>
     telemetry(): SandboxTelemetry
     dispose(): Promise<void>
 }
 
+const maxConsoleEntriesPerRun = 100
+const maxConsoleLineChars = 2_000
+
 let activeHandle: ActiveBotHandle | undefined
+let activeFaultRoute: { remove(): void } | undefined
+let latestRunId = 0
+let runConsoleCount = 0
 let consoleSeq = 1
 let runStartMs = performance.now()
 let rejectedSendIndexes = new Set<number>()
 
+const isWorkerScope = typeof (globalThis as { importScripts?: unknown }).importScripts === "function"
+
 function post(message: SandboxToParentMessage): void {
+    if (isWorkerScope) {
+        ;(globalThis as unknown as { postMessage(payload: SandboxToParentMessage): void }).postMessage(message)
+        return
+    }
     globalThis.parent?.postMessage(message, "*")
 }
 
-function emitConsole(level: SandboxConsoleEntry["level"], parts: readonly unknown[]): void {
-    const text = parts
+function emitConsole(level: SandboxConsoleEntry["level"], parts: readonly unknown[], expectedRunId?: number): void {
+    if (expectedRunId !== undefined && expectedRunId !== latestRunId) return
+    const runId = expectedRunId ?? latestRunId
+    runConsoleCount += 1
+    if (runConsoleCount > maxConsoleEntriesPerRun + 1) return
+    if (runConsoleCount === maxConsoleEntriesPerRun + 1) {
+        post({
+            type: "console",
+            runId,
+            entry: {
+                id: consoleSeq++,
+                level: "warn",
+                text: `Console output truncated after ${maxConsoleEntriesPerRun} lines`,
+                timeMs: Math.round((performance.now() - runStartMs) * 10) / 10,
+            },
+        })
+        return
+    }
+    const rawText = parts
         .map((part) => {
             if (typeof part === "string") return part
             if (part instanceof Error) return fluxerly.describeError(part)
             return inspect(part, { depth: 4 })
         })
         .join(" ")
+    const text = rawText.length > maxConsoleLineChars ? `${rawText.slice(0, maxConsoleLineChars - 3)}...` : rawText
     post({
         type: "console",
+        runId,
         entry: {
             id: consoleSeq++,
             level,
@@ -271,6 +303,8 @@ function serializeError(error: unknown): SandboxErrorPayload {
 }
 
 async function disposeActive(): Promise<void> {
+    activeFaultRoute?.remove()
+    activeFaultRoute = undefined
     const current = activeHandle
     activeHandle = undefined
     if (!current) return
@@ -296,13 +330,15 @@ async function waitForGatewayRecovery(
 
 function wrapDefaultTestBot(bot: DefaultTestBot): ActiveBotHandle {
     const botName = bot.fixtures.botUser().username ?? "fluxerly-bot"
+    const countSends = () => bot.requests().filter((req) => req.method === "POST" && /^\/channels\/[^/]+\/messages$/.test(req.path)).length
     return {
         kind: "default",
         botName,
         canSay: typeof bot.say === "function",
         rest: bot.rest,
+        totalSendCount: countSends,
         async say(content: string) {
-            const beforeSendCount = bot.requests().filter((req) => req.method === "POST" && /^\/channels\/[^/]+\/messages$/.test(req.path)).length
+            const beforeSendCount = countSends()
             const replies = await bot.say(content, { timeoutMs: 8_000 })
             return replies
                 .filter((_message, offset) => !rejectedSendIndexes.has(beforeSendCount + offset))
@@ -340,59 +376,66 @@ async function bootEffectBot(options: Record<string, unknown>): Promise<ActiveBo
             ...(typeof options.logging === "object" && options.logging !== null ? (options.logging as Record<string, unknown>) : {}),
         },
     }
-    const bot = await Effect.runPromise(
-        fluxerlyEffectTesting.createTestBot(mergedOptions as never).pipe(Scope.provide(scope)) as unknown as Effect.Effect<
-            {
-                readonly fixtures: DefaultTestBot["fixtures"]
-                readonly rest: DefaultTestBot["rest"]
-                ready(): Effect.Effect<void, unknown>
-                say(content: string, options?: { timeoutMs?: number }): Effect.Effect<readonly unknown[], unknown>
-                disconnect(options?: { code?: number }): Effect.Effect<void, unknown>
-                idle(options?: { timeoutMs?: number }): Effect.Effect<void, unknown>
-                logs(): readonly unknown[]
-                requests(): readonly { readonly method: string; readonly path: string }[]
-                commands(): readonly unknown[]
-                counters(): { readonly resumes: number; readonly reconnects: number } & Record<string, unknown>
-                failures(): readonly unknown[]
+    try {
+        const bot = await Effect.runPromise(
+            fluxerlyEffectTesting.createTestBot(mergedOptions as never).pipe(Scope.provide(scope)) as unknown as Effect.Effect<
+                {
+                    readonly fixtures: DefaultTestBot["fixtures"]
+                    readonly rest: DefaultTestBot["rest"]
+                    ready(): Effect.Effect<void, unknown>
+                    say(content: string, options?: { timeoutMs?: number }): Effect.Effect<readonly unknown[], unknown>
+                    disconnect(options?: { code?: number }): Effect.Effect<void, unknown>
+                    idle(options?: { timeoutMs?: number }): Effect.Effect<void, unknown>
+                    logs(): readonly unknown[]
+                    requests(): readonly { readonly method: string; readonly path: string }[]
+                    commands(): readonly unknown[]
+                    counters(): { readonly resumes: number; readonly reconnects: number } & Record<string, unknown>
+                    failures(): readonly unknown[]
+                },
+                unknown
+            >,
+        )
+        await Effect.runPromise(bot.ready())
+        const botName = bot.fixtures.botUser().username ?? "fluxerly-bot"
+        const countSends = () =>
+            bot.requests().filter((req: { readonly method: string; readonly path: string }) => req.method === "POST" && /^\/channels\/[^/]+\/messages$/.test(req.path))
+                .length
+        return {
+            kind: "effect",
+            botName,
+            canSay: true,
+            rest: bot.rest,
+            totalSendCount: countSends,
+            async say(content: string) {
+                const beforeSendCount = countSends()
+                const replies = await Effect.runPromise(bot.say(content, { timeoutMs: 8_000 }))
+                return replies
+                    .filter((_message: unknown, offset: number) => !rejectedSendIndexes.has(beforeSendCount + offset))
+                    .map((message: unknown) => serializeReply(message, botName))
             },
-            unknown
-        >,
-    )
-    await Effect.runPromise(bot.ready())
-    const botName = bot.fixtures.botUser().username ?? "fluxerly-bot"
-    return {
-        kind: "effect",
-        botName,
-        canSay: true,
-        rest: bot.rest,
-        async say(content: string) {
-            const beforeSendCount = bot
-                .requests()
-                .filter((req: { readonly method: string; readonly path: string }) => req.method === "POST" && /^\/channels\/[^/]+\/messages$/.test(req.path)).length
-            const replies = await Effect.runPromise(bot.say(content, { timeoutMs: 8_000 }))
-            return replies
-                .filter((_message: unknown, offset: number) => !rejectedSendIndexes.has(beforeSendCount + offset))
-                .map((message: unknown) => serializeReply(message, botName))
-        },
-        async disconnect() {
-            const before = bot.counters()
-            await Effect.runPromise(bot.disconnect({ code: 4000 }))
-            await waitForGatewayRecovery(() => bot.counters(), before.resumes, before.reconnects)
-            await Effect.runPromise(bot.idle({ timeoutMs: 5_000 }))
-        },
-        telemetry() {
-            return collectTelemetry({
-                logs: () => bot.logs(),
-                requests: () => bot.requests(),
-                commands: () => bot.commands(),
-                counters: () => bot.counters(),
-                failures: () => bot.failures(),
-            })
-        },
-        async dispose() {
-            bot.failures()
-            await Effect.runPromise(Scope.close(scope, Exit.void))
-        },
+            async disconnect() {
+                const before = bot.counters()
+                await Effect.runPromise(bot.disconnect({ code: 4000 }))
+                await waitForGatewayRecovery(() => bot.counters(), before.resumes, before.reconnects)
+                await Effect.runPromise(bot.idle({ timeoutMs: 5_000 }))
+            },
+            telemetry() {
+                return collectTelemetry({
+                    logs: () => bot.logs(),
+                    requests: () => bot.requests(),
+                    commands: () => bot.commands(),
+                    counters: () => bot.counters(),
+                    failures: () => bot.failures(),
+                })
+            },
+            async dispose() {
+                bot.failures()
+                await Effect.runPromise(Scope.close(scope, Exit.void))
+            },
+        }
+    } catch (error) {
+        await Effect.runPromise(Scope.close(scope, Exit.void)).catch(() => {})
+        throw error
     }
 }
 
@@ -412,8 +455,30 @@ function isBotConfigLike(value: unknown): value is Record<string, unknown> {
     return "commands" in record || "events" in record || "setup" in record || "cache" in record
 }
 
+async function disposeBots(bots: readonly DefaultTestBot[], extra?: ActiveBotHandle): Promise<void> {
+    if (extra) {
+        try {
+            await extra.dispose()
+        } catch {
+            // Ignore shutdown errors from superseded runs
+        }
+    }
+    for (const bot of bots) {
+        try {
+            bot.failures()
+            await bot.shutdown()
+        } catch {
+            // Ignore already-shut-down bots
+        }
+    }
+}
+
 async function handleRun(runId: number, code: string, mode: SandboxMode): Promise<void> {
+    latestRunId = runId
+    const isStale = () => runId !== latestRunId
+    runConsoleCount = 0
     await disposeActive()
+    if (isStale()) return
     rejectedSendIndexes = new Set<number>()
     runStartMs = performance.now()
     let compileMs = 0
@@ -431,6 +496,7 @@ async function handleRun(runId: number, code: string, mode: SandboxMode): Promis
         compileMs = Math.round((performance.now() - compileStart) * 10) / 10
     } catch (error) {
         compileMs = Math.round((performance.now() - compileStart) * 10) / 10
+        if (isStale()) return
         post({
             type: "runResult",
             runId,
@@ -490,15 +556,16 @@ async function handleRun(runId: number, code: string, mode: SandboxMode): Promis
     }
 
     const sandboxConsole = {
-        log: (...args: unknown[]) => emitConsole("log", args),
-        info: (...args: unknown[]) => emitConsole("info", args),
-        warn: (...args: unknown[]) => emitConsole("warn", args),
-        error: (...args: unknown[]) => emitConsole("error", args),
-        dir: (...args: unknown[]) => emitConsole("log", args),
+        log: (...args: unknown[]) => emitConsole("log", args, runId),
+        info: (...args: unknown[]) => emitConsole("info", args, runId),
+        warn: (...args: unknown[]) => emitConsole("warn", args, runId),
+        error: (...args: unknown[]) => emitConsole("error", args, runId),
+        dir: (...args: unknown[]) => emitConsole("log", args, runId),
     }
 
     const mod: { exports: Record<string, unknown> } = { exports: {} }
     const execStart = performance.now()
+    let nextHandle: ActiveBotHandle | undefined
     try {
         const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
             ...args: string[]
@@ -510,14 +577,18 @@ async function handleRun(runId: number, code: string, mode: SandboxMode): Promis
         ) => Promise<void>
         const fn = new AsyncFunction("require", "exports", "module", "console", compiled)
         await fn(sandboxRequire, mod.exports, mod, sandboxConsole)
+        if (isStale()) {
+            await disposeBots(trackedBots)
+            return
+        }
 
         const candidate = mod.exports.default ?? mod.exports.bot
         if (isTestClientLike(candidate)) {
             await candidate.ready()
-            activeHandle = wrapDefaultTestBot(candidate as DefaultTestBot)
+            nextHandle = wrapDefaultTestBot(candidate as DefaultTestBot)
         } else if (isBotConfigLike(candidate)) {
             if (usedEffectImport) {
-                activeHandle = await bootEffectBot(candidate)
+                nextHandle = await bootEffectBot(candidate)
             } else {
                 const bot = fluxerlyTesting.createTestBot({
                     ...candidate,
@@ -528,8 +599,9 @@ async function handleRun(runId: number, code: string, mode: SandboxMode): Promis
                             : {}),
                     },
                 } as Parameters<typeof fluxerlyTesting.createTestBot>[0])
+                trackedBots.push(bot)
                 await bot.ready()
-                activeHandle = wrapDefaultTestBot(bot)
+                nextHandle = wrapDefaultTestBot(bot)
             }
         } else if (trackedBots.length > 0) {
             const lastBot = trackedBots[trackedBots.length - 1]!
@@ -538,9 +610,15 @@ async function handleRun(runId: number, code: string, mode: SandboxMode): Promis
             } catch {
                 // Already shut down by user script; keep telemetry readable
             }
-            activeHandle = wrapDefaultTestBot(lastBot)
+            nextHandle = wrapDefaultTestBot(lastBot)
         }
 
+        if (isStale()) {
+            await disposeBots(trackedBots, nextHandle)
+            return
+        }
+
+        activeHandle = nextHandle
         const runMs = Math.round((performance.now() - execStart) * 10) / 10
         post({
             type: "runResult",
@@ -553,6 +631,13 @@ async function handleRun(runId: number, code: string, mode: SandboxMode): Promis
             telemetry: activeHandle ? activeHandle.telemetry() : emptyTelemetry(),
         })
     } catch (error) {
+        const telemetry = nextHandle
+            ? nextHandle.telemetry()
+            : trackedBots.length > 0
+              ? wrapDefaultTestBot(trackedBots[trackedBots.length - 1]!).telemetry()
+              : emptyTelemetry()
+        await disposeBots(trackedBots, nextHandle)
+        if (isStale()) return
         const runMs = Math.round((performance.now() - execStart) * 10) / 10
         post({
             type: "runResult",
@@ -562,14 +647,15 @@ async function handleRun(runId: number, code: string, mode: SandboxMode): Promis
             runMs,
             interactive: false,
             botName: "fluxerly-bot",
-            telemetry: activeHandle ? activeHandle.telemetry() : emptyTelemetry(),
+            telemetry,
             error: serializeError(error),
         })
     }
 }
 
 async function handleSay(requestId: number, content: string): Promise<void> {
-    if (!activeHandle) {
+    const handle = activeHandle
+    if (!handle) {
         post({
             type: "sayResult",
             requestId,
@@ -583,7 +669,8 @@ async function handleSay(requestId: number, content: string): Promise<void> {
     }
     const start = performance.now()
     try {
-        const replies = await activeHandle.say(content)
+        const replies = await handle.say(content)
+        if (activeHandle !== handle) return
         const durationMs = Math.round((performance.now() - start) * 10) / 10
         post({
             type: "sayResult",
@@ -591,9 +678,10 @@ async function handleSay(requestId: number, content: string): Promise<void> {
             ok: true,
             durationMs,
             replies,
-            telemetry: activeHandle.telemetry(),
+            telemetry: handle.telemetry(),
         })
     } catch (error) {
+        if (activeHandle !== handle) return
         const durationMs = Math.round((performance.now() - start) * 10) / 10
         post({
             type: "sayResult",
@@ -601,14 +689,15 @@ async function handleSay(requestId: number, content: string): Promise<void> {
             ok: false,
             durationMs,
             replies: [],
-            telemetry: activeHandle.telemetry(),
+            telemetry: handle.telemetry(),
             error: serializeError(error),
         })
     }
 }
 
 async function handleFault(requestId: number, fault: SandboxFaultKind): Promise<void> {
-    if (!activeHandle) {
+    const handle = activeHandle
+    if (!handle) {
         post({
             type: "faultResult",
             requestId,
@@ -621,23 +710,25 @@ async function handleFault(requestId: number, fault: SandboxFaultKind): Promise<
     }
     try {
         if (fault === "disconnect") {
-            await activeHandle.disconnect()
+            await handle.disconnect()
+            if (activeHandle !== handle) return
             post({
                 type: "faultResult",
                 requestId,
                 ok: true,
                 fault,
                 note: "Dropped shard 0 with close code 4000. Fluxerly resumed the session cleanly",
-                telemetry: activeHandle.telemetry(),
+                telemetry: handle.telemetry(),
             })
             return
         }
 
-        const handle = activeHandle
+        activeFaultRoute?.remove()
         const route = handle.rest.respond("POST /channels/:id/messages", () => {
             route.remove()
-            // The current request is already recorded in requests() when the responder runs
-            const sendCount = handle.telemetry().requests.filter((req) => req.method === "POST" && /^\/channels\/[^/]+\/messages$/.test(req.path)).length
+            if (activeFaultRoute === route) activeFaultRoute = undefined
+            // Use the unsliced REST count so rejected indexes stay aligned with say() after 80+ requests
+            const sendCount = handle.totalSendCount()
             if (sendCount > 0) rejectedSendIndexes.add(sendCount - 1)
             if (fault === "429") {
                 return {
@@ -657,6 +748,7 @@ async function handleFault(requestId: number, fault: SandboxFaultKind): Promise<
                 body: { code: "UNKNOWN_CHANNEL", message: "Unknown Channel" },
             }
         })
+        activeFaultRoute = route
 
         const note =
             fault === "429"
@@ -671,22 +763,24 @@ async function handleFault(requestId: number, fault: SandboxFaultKind): Promise<
             ok: true,
             fault,
             note,
-            telemetry: activeHandle.telemetry(),
+            telemetry: handle.telemetry(),
         })
     } catch (error) {
+        if (activeHandle !== handle) return
         post({
             type: "faultResult",
             requestId,
             ok: false,
             fault,
             note: "Failed to inject fault",
-            telemetry: activeHandle.telemetry(),
+            telemetry: handle.telemetry(),
             error: serializeError(error),
         })
     }
 }
 
 globalThis.addEventListener("message", (event: MessageEvent<ParentToSandboxMessage>) => {
+    if (!isWorkerScope && event.source !== undefined && event.source !== globalThis.parent) return
     const data = event.data
     if (!data || typeof data !== "object") return
     if (data.type === "run") {
@@ -696,6 +790,7 @@ globalThis.addEventListener("message", (event: MessageEvent<ParentToSandboxMessa
     } else if (data.type === "fault") {
         void handleFault(data.requestId, data.fault)
     } else if (data.type === "dispose") {
+        latestRunId += 1
         void disposeActive()
     }
 })

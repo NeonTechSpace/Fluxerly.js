@@ -81,7 +81,7 @@ export default defineBot({
         guidedFault: { label: "Simulate 403", fault: "403" },
         code: `import { defineBot, describeError, errors } from "@neontechspace/fluxerly"
 
-// Click "Next 403" or "Next 404" in the channel bar, then send !announce
+// Click "Simulate 403" in the channel bar, then send !announce
 export default defineBot({
     commands: {
         prefix: "!",
@@ -220,7 +220,7 @@ export default defineBot({
         code: `import { Effect } from "effect"
 import { builders, colors, commands, defineBot, describeError } from "@neontechspace/fluxerly/effect"
 
-// Try clicking "Next 403" then !ping to watch Effect.catch handle the typed failure
+// Try clicking "Simulate 403" then !ping to watch Effect.catch handle the typed failure
 export default defineBot({
     commands: {
         prefix: "!",

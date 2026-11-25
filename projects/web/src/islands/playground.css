@@ -3,7 +3,9 @@
 
 .pg {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
+    min-width: 0;
 }
 
 .pg-sandbox-frame {
@@ -21,6 +23,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px 12px;
+    min-width: 0;
+    max-width: 100%;
     padding: 6px 10px;
     border-radius: var(--corner-large);
     corner-shape: squircle;
@@ -31,6 +35,7 @@
     flex-wrap: wrap;
     gap: 5px;
     min-width: 0;
+    max-width: 100%;
 }
 
 .pg-preset-btn {
@@ -742,25 +747,88 @@ html[data-still] .pg * {
     transition: none;
 }
 
+@media (max-width: 1440px), (max-height: 820px) {
+    .pg {
+        gap: 8px;
+    }
+
+    .pg-editor-pane,
+    .pg-right-stack:not([data-advanced]) .pg-channel-pane {
+        height: clamp(360px, calc(100svh - 210px), 540px);
+    }
+
+    .pg-chat-log {
+        height: clamp(140px, calc(50svh - 170px), 210px);
+    }
+
+    .pg-inspector-body {
+        height: clamp(110px, calc(32svh - 90px), 140px);
+    }
+}
+
 @media (max-width: 1080px) {
     .pg-split {
         grid-template-columns: minmax(0, 1fr);
     }
 
     .pg-editor-pane {
-        height: 420px;
+        height: 380px;
     }
 
     .pg-right-stack:not([data-advanced]) .pg-channel-pane {
-        height: 460px;
+        height: 410px;
     }
 
     .pg-right-stack {
-        gap: 12px;
+        gap: 10px;
     }
 }
 
 @media (max-width: 640px) {
+    .pg-toolbar {
+        gap: 6px;
+        padding: 6px 8px;
+    }
+
+    .pg-presets {
+        flex-wrap: nowrap;
+        width: 100%;
+        overflow-x: auto;
+        scrollbar-width: none;
+    }
+
+    .pg-presets::-webkit-scrollbar {
+        display: none;
+    }
+
+    .pg-preset-btn {
+        flex: none;
+        padding: 0 10px;
+    }
+
+    .pg-actions {
+        width: 100%;
+        gap: 6px;
+    }
+
+    .pg-status-pill {
+        width: 100%;
+        min-height: 34px;
+        padding: 0 10px;
+    }
+
+    .pg-btn {
+        padding: 0 10px;
+    }
+
+    .pg-editor-pane {
+        height: 320px;
+    }
+
+    .pg-right-stack:not([data-advanced]) .pg-channel-pane {
+        height: 340px;
+    }
+
     .pg-embed-fields {
         grid-template-columns: minmax(0, 1fr);
     }

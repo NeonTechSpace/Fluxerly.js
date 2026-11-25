@@ -55,24 +55,65 @@ const emptyTelemetry: SandboxTelemetry = {
 }
 
 let runtimeScriptPromise: Promise<string> | undefined
+const maxShareTokenChars = 65_536
+const maxSharePayloadBytes = 65_536
+const maxChatItems = 120
+const runTimeoutMs = 8_000
 
 function loadRuntimeScript(): Promise<string> {
-    runtimeScriptPromise ??= fetch("/playground/runtime.js").then(async (response) => {
-        if (!response.ok) throw new Error(`Could not load playground runtime (HTTP ${response.status})`)
-        return response.text()
-    })
+    if (!runtimeScriptPromise) {
+        runtimeScriptPromise = fetch("/playground/runtime.js")
+            .then(async (response) => {
+                if (!response.ok) throw new Error(`Could not load playground runtime (HTTP ${response.status})`)
+                return response.text()
+            })
+            .catch((error: unknown) => {
+                runtimeScriptPromise = undefined
+                throw error
+            })
+    }
     return runtimeScriptPromise
 }
 
 function buildSandboxSrcDoc(runtimeScript: string): string {
-    // Prevent any literal </script> inside bundled strings from terminating the inline script element
-    const safeScript = runtimeScript.replace(/<\/script/gi, "<\\/script")
+    // Run the bundled SDK runtime inside a dedicated blob Web Worker owned by the opaque-origin srcdoc iframe.
+    // The Worker inherits the opaque null origin and connect-src 'none' CSP while keeping synchronous infinite loops
+    // off the main UI thread so the timeout watchdog and Reset button remain responsive and can terminate execution
+    const encodedRuntime = JSON.stringify(runtimeScript).replace(/</g, "\\u003c")
+    const bootstrap = [
+        `(function(){`,
+        `var runtimeCode=${encodedRuntime};`,
+        `var workerUrl=URL.createObjectURL(new Blob([runtimeCode],{type:"text/javascript"}));`,
+        `var worker=null;`,
+        `var activeRunId=0;`,
+        `var emptyTelemetry={logs:[],requests:[],gateway:[],counters:{restRetries:0,rateLimitWaits:0,reconnects:0,resumes:0,commandRejections:0,handlerFailures:0},failures:0};`,
+        `function spawnWorker(){`,
+        `if(worker){worker.terminate();worker=null;}`,
+        `worker=new Worker(workerUrl);`,
+        `worker.onmessage=function(event){window.parent.postMessage(event.data,"*");};`,
+        `worker.onerror=function(event){`,
+        `window.parent.postMessage({type:"runResult",runId:activeRunId,ok:false,compileMs:0,runMs:0,interactive:false,botName:"fluxerly-bot",telemetry:emptyTelemetry,error:{name:"WorkerError",message:(event&&event.message)||"Sandbox worker stopped unexpectedly"}},"*");`,
+        `};`,
+        `}`,
+        `spawnWorker();`,
+        `window.addEventListener("message",function(event){`,
+        `if(event.source!==window.parent)return;`,
+        `var data=event.data;`,
+        `if(!data||typeof data!=="object")return;`,
+        `if(data.type==="terminate"){if(worker){worker.terminate();worker=null;}return;}`,
+        `if(data.type==="restart"){spawnWorker();return;}`,
+        `if(data.type==="run"&&typeof data.runId==="number"){activeRunId=data.runId;}`,
+        `if(!worker)spawnWorker();`,
+        `worker.postMessage(data);`,
+        `});`,
+        `})();`,
+    ].join("")
     return [
         "<!doctype html>",
         '<html lang="en"><head><meta charset="utf-8">',
-        '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\' \'unsafe-eval\'; connect-src \'none\'; img-src \'none\'; style-src \'none\'; form-action \'none\';">',
+        '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\' \'unsafe-eval\' blob:; worker-src blob:; connect-src \'none\'; img-src \'none\'; style-src \'none\'; form-action \'none\';">',
         "</head><body>",
-        `<script>${safeScript}</script>`,
+        `<script>${bootstrap}</script>`,
         "</body></html>",
     ].join("")
 }
@@ -92,27 +133,73 @@ function fromBase64Url(value: string): Uint8Array {
     return bytes
 }
 
-async function encodeShareState(payload: { preset: string; mode: SandboxMode; code: string }): Promise<string> {
+async function encodeShareState(payload: { preset: string; mode: SandboxMode; code: string }): Promise<string | null> {
     const raw = new TextEncoder().encode(JSON.stringify(payload))
+    if (raw.byteLength > maxSharePayloadBytes) return null
+    let token: string
     if (typeof CompressionStream === "function") {
         const stream = new Blob([raw]).stream().pipeThrough(new CompressionStream("deflate-raw"))
         const compressed = new Uint8Array(await new Response(stream).arrayBuffer())
-        return `z.${toBase64Url(compressed)}`
+        token = `z.${toBase64Url(compressed)}`
+    } else {
+        token = `r.${toBase64Url(raw)}`
     }
-    return `r.${toBase64Url(raw)}`
+    if (token.length > maxShareTokenChars) return null
+    return token
 }
 
-async function decodeShareState(token: string): Promise<{ preset?: string; mode?: SandboxMode; code?: string } | null> {
+async function readStreamWithByteCap(stream: ReadableStream<Uint8Array>, maxBytes: number): Promise<Uint8Array | null> {
+    const reader = stream.getReader()
+    const chunks: Uint8Array[] = []
+    let total = 0
+    try {
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            if (!value) continue
+            total += value.byteLength
+            if (total > maxBytes) {
+                await reader.cancel().catch(() => {})
+                return null
+            }
+            chunks.push(value)
+        }
+    } finally {
+        reader.releaseLock()
+    }
+    const merged = new Uint8Array(total)
+    let offset = 0
+    for (const chunk of chunks) {
+        merged.set(chunk, offset)
+        offset += chunk.byteLength
+    }
+    return merged
+}
+
+function parseSharePayload(value: unknown): { preset?: string; mode?: SandboxMode; code: string } | null {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return null
+    const record = value as Record<string, unknown>
+    if (typeof record.code !== "string") return null
+    const preset = typeof record.preset === "string" ? record.preset : undefined
+    const mode = record.mode === "default" || record.mode === "effect" ? record.mode : undefined
+    return { code: record.code, ...(preset ? { preset } : {}), ...(mode ? { mode } : {}) }
+}
+
+async function decodeShareState(token: string): Promise<{ preset?: string; mode?: SandboxMode; code: string } | null> {
+    if (token.length > maxShareTokenChars) return null
     try {
         if (token.startsWith("z.") && typeof DecompressionStream === "function") {
             const bytes = new Uint8Array(fromBase64Url(token.slice(2)))
+            if (bytes.byteLength > maxSharePayloadBytes) return null
             const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"))
-            const text = await new Response(stream).text()
-            return JSON.parse(text) as { preset?: string; mode?: SandboxMode; code?: string }
+            const raw = await readStreamWithByteCap(stream, maxSharePayloadBytes)
+            if (!raw) return null
+            return parseSharePayload(JSON.parse(new TextDecoder().decode(raw)))
         }
         if (token.startsWith("r.")) {
-            const text = new TextDecoder().decode(fromBase64Url(token.slice(2)))
-            return JSON.parse(text) as { preset?: string; mode?: SandboxMode; code?: string }
+            const bytes = fromBase64Url(token.slice(2))
+            if (bytes.byteLength > maxSharePayloadBytes) return null
+            return parseSharePayload(JSON.parse(new TextDecoder().decode(bytes)))
         }
     } catch {
         return null
@@ -189,6 +276,9 @@ export default function Playground() {
 
     const [running, setRunning] = useState(false)
     const [interactive, setInteractive] = useState(false)
+    const [sharedPendingRun, setSharedPendingRun] = useState(false)
+    const [hashSettled, setHashSettled] = useState(false)
+    const [sandboxTimedOut, setSandboxTimedOut] = useState(false)
     const [compileMs, setCompileMs] = useState<number | null>(null)
     const [runMs, setRunMs] = useState<number | null>(null)
     const [runError, setRunError] = useState<SandboxErrorPayload | null>(null)
@@ -201,15 +291,23 @@ export default function Playground() {
     const [inspectorTab, setInspectorTab] = useState<InspectorTab>("logs")
     const [consoleEntries, setConsoleEntries] = useState<SandboxConsoleEntry[]>([])
     const [telemetry, setTelemetry] = useState<SandboxTelemetry>(emptyTelemetry)
-    const [shareCopied, setShareCopied] = useState(false)
+    const [shareStatus, setShareStatus] = useState<"idle" | "copied" | "ready" | "too-large">("idle")
+    const shareTimerRef = useRef<number | undefined>(undefined)
 
     const iframeRef = useRef<HTMLIFrameElement>(null)
     const runSeqRef = useRef(0)
     const reqSeqRef = useRef(0)
+    const activeSayIdRef = useRef(0)
+    const activeFaultIdRef = useRef(0)
+    const runTimeoutRef = useRef<number | undefined>(undefined)
+    const pendingRestartRunRef = useRef<{ readonly code: string; readonly mode: SandboxMode } | null>(null)
+    const lastRanRef = useRef<{ readonly code: string; readonly mode: SandboxMode } | null>(null)
     const chatSeqRef = useRef(1)
     const chatLogRef = useRef<HTMLDivElement>(null)
     const latestCodeRef = useRef(code)
     const latestModeRef = useRef(mode)
+    const sharedPendingRunRef = useRef(sharedPendingRun)
+    const hashSettledRef = useRef(hashSettled)
     const pendingSayRef = useRef<{ readonly beforeWaits: number; readonly faultWas: string | null }>({
         beforeWaits: 0,
         faultWas: null,
@@ -217,6 +315,19 @@ export default function Playground() {
 
     latestCodeRef.current = code
     latestModeRef.current = mode
+    sharedPendingRunRef.current = sharedPendingRun
+    hashSettledRef.current = hashSettled
+
+    const clearRunWatchdog = useCallback(() => {
+        if (runTimeoutRef.current !== undefined) {
+            window.clearTimeout(runTimeoutRef.current)
+            runTimeoutRef.current = undefined
+        }
+    }, [])
+
+    const appendChat = useCallback((items: readonly ChatItem[]) => {
+        setChat((previous) => [...previous, ...items].slice(-maxChatItems))
+    }, [])
 
     const activePreset: PlaygroundPreset = getPreset(presetId)
 
@@ -246,29 +357,63 @@ export default function Playground() {
         })
     }
 
-    // Restore shared code from URL hash (#s=...) or preset hash (#results, #effect, etc.) on mount
+    // Restore shared code from URL hash (#s=...) or preset hash (#results, #effect, etc.) on mount.
+    // Shared snippets (#s=...) never execute automatically on arrival; the visitor reviews and clicks Run explicitly
     useEffect(() => {
+        let active = true
         const hash = window.location.hash
         if (hash.startsWith("#s=")) {
             void decodeShareState(hash.slice(3)).then((decoded) => {
-                if (!decoded?.code) return
-                if (decoded.preset) setPresetId(getPreset(decoded.preset).id)
-                if (decoded.mode === "default" || decoded.mode === "effect") setMode(decoded.mode)
-                setCode(decoded.code)
+                if (!active) return
+                if (decoded !== null) {
+                    const matchedPreset = decoded.preset ? getPreset(decoded.preset) : undefined
+                    if (matchedPreset) {
+                        setPresetId(matchedPreset.id)
+                        setDraft(matchedPreset.quickMessages[0] ?? "!ping")
+                    }
+                    if (decoded.mode === "default" || decoded.mode === "effect") {
+                        setMode(decoded.mode)
+                        latestModeRef.current = decoded.mode
+                    }
+                    setCode(decoded.code)
+                    latestCodeRef.current = decoded.code
+                    setAutoRun(false)
+                    setSharedPendingRun(true)
+                    sharedPendingRunRef.current = true
+                    setInteractive(false)
+                    setChat([
+                        {
+                            id: chatSeqRef.current++,
+                            kind: "system",
+                            text: "Shared snippet loaded from link. Review the code and click Run to execute it",
+                        },
+                    ])
+                }
+                hashSettledRef.current = true
+                setHashSettled(true)
             })
-        } else if (hash.length > 1) {
-            const matched = playgroundPresets.find((item) => item.id === hash.slice(1))
-            if (matched) {
-                setPresetId(matched.id)
-                setMode(matched.mode)
-                setCode(matched.code)
-                setDraft(matched.quickMessages[0] ?? "!ping")
+        } else {
+            if (hash.length > 1) {
+                const matched = playgroundPresets.find((item) => item.id === hash.slice(1))
+                if (matched) {
+                    setPresetId(matched.id)
+                    setMode(matched.mode)
+                    setCode(matched.code)
+                    latestModeRef.current = matched.mode
+                    latestCodeRef.current = matched.code
+                    setDraft(matched.quickMessages[0] ?? "!ping")
+                }
             }
+            hashSettledRef.current = true
+            setHashSettled(true)
+        }
+        return () => {
+            active = false
         }
     }, [])
 
     // Lazily fetch the pre-bundled browser SDK runtime once and build the sandbox srcDoc
-    useEffect(() => {
+    const ensureRuntimeLoaded = useCallback(() => {
         let cancelled = false
         loadRuntimeScript()
             .then((script) => {
@@ -285,23 +430,80 @@ export default function Playground() {
         }
     }, [])
 
+    useEffect(() => ensureRuntimeLoaded(), [ensureRuntimeLoaded])
+
+    useEffect(
+        () => () => {
+            clearRunWatchdog()
+            if (shareTimerRef.current !== undefined) window.clearTimeout(shareTimerRef.current)
+        },
+        [clearRunWatchdog],
+    )
+
     const postToSandbox = useCallback((message: ParentToSandboxMessage) => {
         iframeRef.current?.contentWindow?.postMessage(message, "*")
     }, [])
 
-    const triggerRun = useCallback(
-        (nextCode?: string, nextMode?: SandboxMode) => {
-            if (bootState !== "ready") return
-            const targetCode = nextCode ?? latestCodeRef.current
-            const targetMode = nextMode ?? latestModeRef.current
+    const startRun = useCallback(
+        (targetCode: string, targetMode: SandboxMode) => {
+            clearRunWatchdog()
             const runId = ++runSeqRef.current
+            activeSayIdRef.current = 0
+            activeFaultIdRef.current = 0
+            lastRanRef.current = { code: targetCode, mode: targetMode }
+            setSharedPendingRun(false)
+            sharedPendingRunRef.current = false
+            setSandboxTimedOut(false)
+            setSending(false)
             setRunning(true)
             setRunError(null)
             setArmedFault(null)
             setConsoleEntries([])
+            setChat([])
             postToSandbox({ type: "run", runId, code: targetCode, mode: targetMode })
+            runTimeoutRef.current = window.setTimeout(() => {
+                if (runSeqRef.current !== runId) return
+                runSeqRef.current += 1
+                postToSandbox({ type: "terminate" })
+                setRunning(false)
+                setInteractive(false)
+                setSending(false)
+                setSandboxTimedOut(true)
+                setRunError({
+                    name: "TimeoutError",
+                    message: `Run timed out after ${runTimeoutMs / 1000} s. Click Reset or Run to restart the isolated sandbox`,
+                })
+            }, runTimeoutMs)
         },
-        [bootState, postToSandbox],
+        [clearRunWatchdog, postToSandbox],
+    )
+
+    const triggerRun = useCallback(
+        (nextCode?: string, nextMode?: SandboxMode) => {
+            const targetCode = nextCode ?? latestCodeRef.current
+            const targetMode = nextMode ?? latestModeRef.current
+            if (sandboxTimedOut || running) {
+                clearRunWatchdog()
+                runSeqRef.current += 1
+                pendingRestartRunRef.current = { code: targetCode, mode: targetMode }
+                setSandboxTimedOut(false)
+                setRunning(false)
+                setInteractive(false)
+                setBootState("loading")
+                setRunError(null)
+                setSending(false)
+                postToSandbox({ type: "restart" })
+                return
+            }
+            if (bootState !== "ready") {
+                if (pendingRestartRunRef.current !== null) {
+                    pendingRestartRunRef.current = { code: targetCode, mode: targetMode }
+                }
+                return
+            }
+            startRun(targetCode, targetMode)
+        },
+        [bootState, clearRunWatchdog, postToSandbox, running, sandboxTimedOut, startRun],
     )
 
     // Listen to postMessage events coming exclusively from our own sandbox iframe window
@@ -312,25 +514,30 @@ export default function Playground() {
             if (!data || typeof data !== "object") return
 
             if (data.type === "booted") {
+                clearRunWatchdog()
                 setBootState("ready")
                 setBootError(null)
                 setBootMs(data.bootMs)
                 setSdkVersion(data.sdkVersion)
-                const runId = ++runSeqRef.current
-                setRunning(true)
-                setRunError(null)
-                setConsoleEntries([])
-                iframeRef.current?.contentWindow?.postMessage(
-                    { type: "run", runId, code: latestCodeRef.current, mode: latestModeRef.current } satisfies ParentToSandboxMessage,
-                    "*",
-                )
+                setSending(false)
+                activeSayIdRef.current = 0
+                activeFaultIdRef.current = 0
+                const pendingRestart = pendingRestartRunRef.current
+                pendingRestartRunRef.current = null
+                if (pendingRestart) {
+                    startRun(pendingRestart.code, pendingRestart.mode)
+                    return
+                }
+                if (hashSettledRef.current && !sharedPendingRunRef.current) {
+                    startRun(latestCodeRef.current, latestModeRef.current)
+                }
                 return
             }
 
             if (data.type === "console") {
+                if (data.runId !== undefined && data.runId !== runSeqRef.current) return
                 setConsoleEntries((previous) => [...previous.slice(-119), data.entry])
-                setChat((previous) => [
-                    ...previous,
+                appendChat([
                     {
                         id: chatSeqRef.current++,
                         kind: data.entry.level === "error" ? "error" : "system",
@@ -342,18 +549,22 @@ export default function Playground() {
 
             if (data.type === "runResult") {
                 if (data.runId !== runSeqRef.current) return
+                clearRunWatchdog()
                 setRunning(false)
+                setSandboxTimedOut(false)
                 setCompileMs(data.compileMs)
                 setRunMs(data.runMs)
                 setInteractive(data.interactive)
                 setTelemetry(data.telemetry)
                 setRunError(data.error ?? null)
                 if (data.ok) {
-                    setChat([
+                    appendChat([
                         {
                             id: chatSeqRef.current++,
                             kind: "system",
-                            text: `Connected ${data.botName} on in-memory Fluxer gateway (${data.compileMs} ms compile, ${data.runMs} ms boot)`,
+                            text: data.interactive
+                                ? `Connected ${data.botName} on in-memory Fluxer gateway (${data.compileMs} ms compile, ${data.runMs} ms boot)`
+                                : `Script finished (${data.compileMs} ms compile, ${data.runMs} ms run)`,
                         },
                     ])
                 }
@@ -361,6 +572,7 @@ export default function Playground() {
             }
 
             if (data.type === "sayResult") {
+                if (data.requestId !== activeSayIdRef.current) return
                 setSending(false)
                 setTelemetry(data.telemetry)
                 const pending = pendingSayRef.current
@@ -389,7 +601,7 @@ export default function Playground() {
                     additions.push({
                         id: chatSeqRef.current++,
                         kind: "error",
-                        text: `Delivery rejected with HTTP ${pending.faultWas}. Check Output and Logs for Result / describeError details`,
+                        text: `Delivery rejected with HTTP ${pending.faultWas}. Switch to Advanced to inspect Logs and REST details`,
                     })
                 } else {
                     additions.push({
@@ -398,17 +610,17 @@ export default function Playground() {
                         text: `No reply sent (${data.durationMs} ms)`,
                     })
                 }
-                setChat((previous) => [...previous, ...additions])
+                appendChat(additions)
                 return
             }
 
             if (data.type === "faultResult") {
+                if (data.requestId !== activeFaultIdRef.current) return
                 setTelemetry(data.telemetry)
                 if (data.ok && data.fault !== "disconnect") {
                     setArmedFault(data.fault)
                 }
-                setChat((previous) => [
-                    ...previous,
+                appendChat([
                     {
                         id: chatSeqRef.current++,
                         kind: data.ok ? "system" : "error",
@@ -420,16 +632,23 @@ export default function Playground() {
 
         window.addEventListener("message", onMessage)
         return () => window.removeEventListener("message", onMessage)
-    }, [])
+    }, [appendChat, clearRunWatchdog, startRun])
+
+    // Run once after mount if sandbox booted before URL hash check settled (and no shared snippet awaits explicit Run)
+    useEffect(() => {
+        if (!hashSettled || bootState !== "ready" || sharedPendingRun || lastRanRef.current !== null) return
+        startRun(latestCodeRef.current, latestModeRef.current)
+    }, [bootState, hashSettled, sharedPendingRun, startRun])
 
     // Debounced auto-run when user edits code (360ms quiet period so typing stays zero-jank)
     useEffect(() => {
-        if (!autoRun || bootState !== "ready") return
+        if (!autoRun || !hashSettled || sharedPendingRun || bootState !== "ready") return
+        if (lastRanRef.current?.code === code && lastRanRef.current?.mode === mode) return
         const timer = window.setTimeout(() => {
             triggerRun(code, mode)
         }, 360)
         return () => window.clearTimeout(timer)
-    }, [code, mode, autoRun, bootState, triggerRun])
+    }, [code, mode, autoRun, bootState, hashSettled, sharedPendingRun, triggerRun])
 
     useEffect(() => {
         const log = chatLogRef.current
@@ -441,31 +660,55 @@ export default function Playground() {
         setMode(preset.mode)
         setCode(preset.code)
         setDraft(preset.quickMessages[0] ?? "!ping")
+        setSharedPendingRun(false)
+        sharedPendingRunRef.current = false
         setArmedFault(null)
+        setSending(false)
+        activeSayIdRef.current = 0
+        activeFaultIdRef.current = 0
         window.history.replaceState(null, "", `#${preset.id}`)
-        if (!autoRun) triggerRun(preset.code, preset.mode)
+        triggerRun(preset.code, preset.mode)
     }
 
     const resetSandbox = () => {
+        clearRunWatchdog()
         const preset = getPreset(presetId)
         setMode(preset.mode)
         setCode(preset.code)
         setDraft(preset.quickMessages[0] ?? "!ping")
+        setSharedPendingRun(false)
+        sharedPendingRunRef.current = false
+        setSandboxTimedOut(false)
+        setRunning(false)
+        setInteractive(false)
+        setSending(false)
+        setRunError(null)
+        setBootError(null)
         setArmedFault(null)
+        activeSayIdRef.current = 0
+        activeFaultIdRef.current = 0
+        lastRanRef.current = null
+        pendingRestartRunRef.current = { code: preset.code, mode: preset.mode }
         setBootState("loading")
-        setIframeKey((previous) => previous + 1)
+        if (!iframeSrcDoc) {
+            ensureRuntimeLoaded()
+        } else {
+            setIframeKey((previous) => previous + 1)
+        }
     }
 
     const sendChat = (text: string) => {
         const trimmed = text.trim()
         if (!trimmed || !interactive || sending || running) return
         setSending(true)
+        const requestId = ++reqSeqRef.current
+        activeSayIdRef.current = requestId
         pendingSayRef.current = {
             beforeWaits: telemetry.counters.rateLimitWaits,
             faultWas: armedFault,
         }
-        setChat((previous) => [...previous, { id: chatSeqRef.current++, kind: "user", author: "you", text: trimmed }])
-        postToSandbox({ type: "say", requestId: ++reqSeqRef.current, content: trimmed })
+        appendChat([{ id: chatSeqRef.current++, kind: "user", author: "you", text: trimmed }])
+        postToSandbox({ type: "say", requestId, content: trimmed })
     }
 
     const onChatSubmit = (event: { preventDefault(): void }) => {
@@ -476,19 +719,34 @@ export default function Playground() {
 
     const triggerFault = (fault: SandboxFaultKind) => {
         if (!interactive || running) return
-        postToSandbox({ type: "fault", requestId: ++reqSeqRef.current, fault })
+        const requestId = ++reqSeqRef.current
+        activeFaultIdRef.current = requestId
+        postToSandbox({ type: "fault", requestId, fault })
     }
 
     const shareLink = async () => {
+        if (shareTimerRef.current !== undefined) window.clearTimeout(shareTimerRef.current)
         const token = await encodeShareState({ preset: presetId, mode, code })
+        if (token === null) {
+            setShareStatus("too-large")
+            appendChat([
+                {
+                    id: chatSeqRef.current++,
+                    kind: "error",
+                    text: "Snippet exceeds the 64 KiB share link limit",
+                },
+            ])
+            shareTimerRef.current = window.setTimeout(() => setShareStatus("idle"), 2200)
+            return
+        }
         const url = `${window.location.origin}${window.location.pathname}#s=${token}`
         window.history.replaceState(null, "", `#s=${token}`)
-        await copyText(url)
-        setShareCopied(true)
-        window.setTimeout(() => setShareCopied(false), 1800)
+        const copied = await copyText(url)
+        setShareStatus(copied ? "copied" : "ready")
+        shareTimerRef.current = window.setTimeout(() => setShareStatus("idle"), 2000)
     }
 
-    const statusTone = bootState === "error" || runError ? "error" : running || bootState === "loading" ? "busy" : "ok"
+    const statusTone = bootState === "error" || runError ? "error" : running || bootState === "loading" || sharedPendingRun ? "busy" : "ok"
     const statusLabel =
         bootState === "loading"
             ? "Booting runtime"
@@ -496,11 +754,13 @@ export default function Playground() {
               ? "Boot error"
               : running
                 ? "Running"
-                : runError
-                  ? runError.name
-                  : interactive
-                    ? "Bot online"
-                    : "Script finished"
+                : sharedPendingRun
+                  ? "Review before run"
+                  : runError
+                    ? runError.name
+                    : interactive
+                      ? "Bot online"
+                      : "Script finished"
 
     return (
         <div className="pg" data-still={still || undefined}>
@@ -549,7 +809,12 @@ export default function Playground() {
                         {advanced ? "Advanced" : "Guided"}
                     </button>
 
-                    <button type="button" className="pg-btn pg-btn-primary" disabled={bootState !== "ready" || running} onClick={() => triggerRun()}>
+                    <button
+                        type="button"
+                        className="pg-btn pg-btn-primary"
+                        disabled={(bootState !== "ready" && !sandboxTimedOut) || running}
+                        onClick={() => triggerRun()}
+                    >
                         <PlayIcon size={16} weight="fill" aria-hidden="true" />
                         Run
                     </button>
@@ -560,8 +825,20 @@ export default function Playground() {
                     </button>
 
                     <button type="button" className="pg-btn pg-btn-subtle" onClick={() => void shareLink()} aria-label="Copy shareable playground URL">
-                        {shareCopied ? <CheckIcon size={16} weight="bold" aria-hidden="true" /> : <ShareNetworkIcon size={16} weight="bold" aria-hidden="true" />}
-                        {shareCopied ? "Copied" : "Share"}
+                        {shareStatus === "copied" || shareStatus === "ready" ? (
+                            <CheckIcon size={16} weight="bold" aria-hidden="true" />
+                        ) : shareStatus === "too-large" ? (
+                            <WarningCircleIcon size={16} weight="bold" aria-hidden="true" />
+                        ) : (
+                            <ShareNetworkIcon size={16} weight="bold" aria-hidden="true" />
+                        )}
+                        {shareStatus === "copied"
+                            ? "Copied"
+                            : shareStatus === "ready"
+                              ? "Link updated"
+                              : shareStatus === "too-large"
+                                ? "Too large"
+                                : "Share"}
                     </button>
                 </div>
             </div>
@@ -577,7 +854,7 @@ export default function Playground() {
                         <div className="pg-editor-controls">
                             <label className="pg-autorun">
                                 <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} />
-                                <span>Auto-run</span>
+                                <span>Auto-Run</span>
                             </label>
                             {advanced && <span className="pg-shortcut" aria-hidden="true">Ctrl+Enter</span>}
                         </div>
@@ -712,11 +989,21 @@ export default function Playground() {
                                 className="pg-input"
                                 value={draft}
                                 disabled={!interactive}
-                                placeholder={interactive ? "Send a message to your running bot, e.g. !ping" : "Fix code error above to reconnect"}
+                                placeholder={
+                                    interactive
+                                        ? "Send a message to your running bot, e.g. !ping"
+                                        : sharedPendingRun
+                                          ? "Review the shared snippet and click Run to connect"
+                                          : bootState === "loading"
+                                            ? "Booting isolated sandbox runtime"
+                                            : runError
+                                              ? "Fix code error above to reconnect"
+                                              : "Export a defineBot config and click Run to chat"
+                                }
                                 onChange={(event) => setDraft(event.target.value)}
                                 autoComplete="off"
                             />
-                            <button type="submit" className="pg-btn pg-btn-primary" disabled={!interactive || sending || running || !draft.trim()}>
+                            <button type="submit" className="pg-btn pg-btn-subtle" disabled={!interactive || sending || running || !draft.trim()}>
                                 <PaperPlaneTiltIcon size={16} weight="fill" aria-hidden="true" />
                                 Send
                             </button>
@@ -757,9 +1044,9 @@ export default function Playground() {
                             </div>
 
                             <div className="pg-counters" aria-label="SDK Diagnostics Counters">
-                                <span title="429 rate-limit waits">429 {telemetry.counters.rateLimitWaits}</span>
-                                <span title="Gateway resumes">Resumes {telemetry.counters.resumes}</span>
-                                {bootMs !== null && <span title="Sandbox cold boot time">Boot {bootMs} ms</span>}
+                                <span aria-label={`Rate-limit 429 waits: ${telemetry.counters.rateLimitWaits}`}>429 {telemetry.counters.rateLimitWaits}</span>
+                                <span aria-label={`Gateway resumes: ${telemetry.counters.resumes}`}>Resumes {telemetry.counters.resumes}</span>
+                                {bootMs !== null && <span aria-label={`Sandbox cold boot time: ${bootMs} milliseconds`}>Boot {bootMs} ms</span>}
                             </div>
                         </header>
 

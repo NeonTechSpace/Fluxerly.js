@@ -502,4 +502,60 @@ describe("the daily refresh at 04:00 UTC", () => {
         }
         assert.ok(seenBranches.fresh > 400 && seenBranches.refreshed > 0, JSON.stringify(seenBranches))
     })
+
+    test("concurrent cold misses share one npm fetch and one KV write", async () => {
+        npm.hold()
+        const first = ask()
+        const second = ask()
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        npm.release()
+        const [res1, res2] = await Promise.all([first, second])
+        await settle()
+        assert.equal(res1.status, 200)
+        assert.equal(res2.status, 200)
+        assert.deepEqual(await bodyOf(res1), current)
+        assert.deepEqual(await bodyOf(res2), current)
+        // One registry metadata request + one downloads range request, and a single KV write
+        assert.equal(npm.calls.length, 2)
+        assert.equal(kv.writes.length, 1)
+    })
+
+    test("concurrent stale requests with delayed edge write share one npm fetch and one KV write", async () => {
+        kv.seed(older, staleAt)
+        let releasePut!: () => void
+        const putGate = new Promise<void>((resolve) => {
+            releasePut = resolve
+        })
+        const originalPut = cache.put.bind(cache)
+        let firstPut = true
+        cache.put = async (request: Request, response: Response) => {
+            if (firstPut) {
+                firstPut = false
+                await putGate
+            }
+            return originalPut(request, response)
+        }
+        const first = ask()
+        const second = ask()
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        releasePut()
+        const [res1, res2] = await Promise.all([first, second])
+        await settle()
+        assert.equal(res1.status, 200)
+        assert.equal(res2.status, 200)
+        assert.equal(npm.calls.length, 2)
+        assert.equal(kv.writes.length, 1)
+    })
+
+    test("falls through to KV when edge cache match throws", async () => {
+        kv.seed(current, start - hourMs)
+        cache.match = async () => {
+            throw new Error("edge cache unavailable")
+        }
+        const response = await ask()
+        await settle()
+        assert.equal(response.status, 200)
+        assert.deepEqual(await bodyOf(response), current)
+        assert.equal(npm.calls.length, 0)
+    })
 })

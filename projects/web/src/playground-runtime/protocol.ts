@@ -117,6 +117,12 @@ export type ParentToSandboxMessage =
     | {
           readonly type: "dispose"
       }
+    | {
+          readonly type: "terminate"
+      }
+    | {
+          readonly type: "restart"
+      }
 
 export type SandboxToParentMessage =
     | {
@@ -126,6 +132,7 @@ export type SandboxToParentMessage =
       }
     | {
           readonly type: "console"
+          readonly runId?: number
           readonly entry: SandboxConsoleEntry
       }
     | {

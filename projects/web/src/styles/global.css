@@ -242,6 +242,19 @@ pre {
     --code-size: 15px;
 }
 
+/* Laptops and shorter screens tighten vertical rhythm so more content fits per viewport without shrinking type */
+@media (max-width: 1440px), (max-height: 820px) {
+    :root {
+        --section-gap: clamp(68px, 5.5vw, 100px);
+    }
+}
+
+@media (max-width: 899px) {
+    :root {
+        --section-gap: clamp(52px, 7vw, 76px);
+    }
+}
+
 /* Two voices below the hero. Cyan is you and what you do, violet is the SDK and what it knows.
    Each section picks one, and its heading, links and marks follow */
 section[data-accent="cyan"] {
@@ -357,6 +370,12 @@ section[data-accent="violet"] {
     }
 }
 
+@media (min-width: 900px) and (max-width: 1440px), (min-width: 900px) and (max-height: 820px) {
+    .split > .intro > .keepsake {
+        margin-top: clamp(18px, 2vw, 32px);
+    }
+}
+
 /* A few short facts under a section's lead, quiet, each marked with the conductor's waves */
 .facts {
     display: grid;
@@ -401,7 +420,7 @@ section[data-accent="violet"] {
     }
 
     .split > .body {
-        margin-top: 40px;
+        margin-top: 24px;
     }
 
     /* Heading on the left and companion on the right, the lead under both */
@@ -961,6 +980,26 @@ section[id] {
     [data-waterline] .tool-button,
     [data-waterline] .copy {
         min-width: 26px;
+    }
+}
+
+/* Laptops and shorter screens tighten intro sticky offset and spacing after the base declarations */
+@media (max-width: 1440px), (max-height: 820px) {
+    .split > .intro {
+        top: 82px;
+    }
+
+    .lead {
+        margin-top: 14px;
+    }
+
+    .facts {
+        gap: 8px;
+        margin-top: 18px;
+    }
+
+    section[id] {
+        scroll-margin-top: 78px;
     }
 }
 

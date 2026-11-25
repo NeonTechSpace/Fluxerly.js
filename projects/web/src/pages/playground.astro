@@ -52,8 +52,26 @@ const description =
 
     .playground-shell {
         display: grid;
+        grid-template-columns: minmax(0, 1fr);
         gap: 12px;
         margin-inline: var(--frame-inline);
+    }
+
+    @media (max-width: 1440px), (max-height: 820px) {
+        .playground-page {
+            padding-top: 68px;
+            padding-bottom: 20px;
+        }
+
+        .playground-shell {
+            gap: 8px;
+        }
+    }
+
+    @media (max-width: 640px) {
+        .playground-page {
+            padding-top: 64px;
+        }
     }
 
     .playground-head {
