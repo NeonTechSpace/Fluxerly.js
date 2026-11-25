@@ -65,7 +65,7 @@ const runTimeoutMs = 8_000
 
 function loadRuntimeScript(): Promise<string> {
     if (!runtimeScriptPromise) {
-        runtimeScriptPromise = fetch("/playground/runtime.js")
+        runtimeScriptPromise = fetch("/playground/runtime.js", { cache: "no-cache" })
             .then(async (response) => {
                 if (!response.ok) throw new Error(`Could not load playground runtime (HTTP ${response.status})`)
                 return response.text()
