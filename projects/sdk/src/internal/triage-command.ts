@@ -1,7 +1,7 @@
 /**
- * Runs `fluxerly triage [--agent claude|codex|antigravity|opencode|t3code|other] [--model <id>] [--dir <folder>] [--print]`.
+ * Runs `fluxerly triage [--agent antigravity|claude|codex|opencode|t3code|other] [--model <id>] [--dir <folder>] [--print]`.
  * Collects redacted project and SDK facts alongside Fluxerly's triage playbook and either prints a harness-agnostic
- * prompt and session files for any coding agent or starts a detected CLI (Claude Code, Codex, Antigravity, OpenCode
+ * prompt and session files for any coding agent or starts a detected CLI (Antigravity, Claude Code, Codex, OpenCode
  * or T3 Code) inside the bot project to diagnose whether an issue belongs to project code, Fluxer or `@neontechspace/fluxerly`
  */
 
@@ -23,7 +23,7 @@ import { createCliTheme, type CliStreamLike } from "./cli-theme.js"
 import { collectProjectFacts, type DoctorStatus, type ProjectFacts } from "./doctor-command.js"
 import { maskText, maskedMessage } from "./masking.js"
 
-export type TriageAgentId = "claude" | "codex" | "antigravity" | "opencode" | "t3code"
+export type TriageAgentId = "antigravity" | "claude" | "codex" | "opencode" | "t3code"
 export type TriageAgentOption = TriageAgentId | "other"
 
 export interface TriageAgentArgsContext {
@@ -45,6 +45,14 @@ export interface TriageAgentSpec {
 
 export const triageAgents: readonly TriageAgentSpec[] = Object.freeze([
     {
+        id: "antigravity",
+        command: "agy",
+        label: "Antigravity",
+        stateDirEnv: "GEMINI_HOME",
+        defaultStateDir: ".gemini",
+        promptArgs: ["--prompt-interactive"],
+    },
+    {
         id: "claude",
         command: "claude",
         label: "Claude Code",
@@ -57,14 +65,6 @@ export const triageAgents: readonly TriageAgentSpec[] = Object.freeze([
         label: "Codex",
         stateDirEnv: "CODEX_HOME",
         defaultStateDir: ".codex",
-    },
-    {
-        id: "antigravity",
-        command: "agy",
-        label: "Antigravity",
-        stateDirEnv: "GEMINI_HOME",
-        defaultStateDir: ".gemini",
-        promptArgs: ["--prompt-interactive"],
     },
     {
         id: "opencode",
@@ -143,6 +143,7 @@ export interface TriageEnvironment {
     readonly traceTimeoutMs?: number
     readonly detectCommand?: (command: string) => string | undefined
     readonly spawnSession?: (request: TriageSpawnRequest) => Promise<number>
+    readonly copyToClipboard?: (text: string) => Promise<boolean>
     readonly runTraceCommand?: (
         command: string,
         options: {
@@ -194,13 +195,13 @@ export function parseTriageArguments(
             if (!value || value.startsWith("-"))
                 return {
                     ok: false,
-                    message: "The --agent option requires claude, codex, antigravity, opencode, t3code or other",
+                    message: "The --agent option requires antigravity, claude, codex, opencode, t3code or other",
                 }
             const resolved = agentAliases.get(value.toLowerCase())
             if (resolved === undefined)
                 return {
                     ok: false,
-                    message: `Unsupported --agent value "${value}". Supported agents are claude, codex, antigravity, opencode, t3code and other`,
+                    message: `Unsupported --agent value "${value}". Supported agents are antigravity, claude, codex, opencode, t3code and other`,
                 }
             agent = resolved
         } else if (arg === "--model") {
@@ -815,9 +816,12 @@ async function pickTriageAgent(
     const theme = createCliTheme(output, { env, platform })
     const rl = createInterface({ input, output })
     try {
-        const otherIndex = agents.length + 1
+        const sortedAgents = [...agents].sort((left, right) =>
+            left.label.localeCompare(right.label, "en", { sensitivity: "base" }),
+        )
+        const otherIndex = sortedAgents.length + 1
         const menu = [
-            ...agents.map(
+            ...sortedAgents.map(
                 (agent, index) =>
                     `  ${theme.cyan(`[${index + 1}]`)} ${theme.bold(agent.label)} ${theme.faint(`(${agent.command})`)}`,
             ),
@@ -827,7 +831,7 @@ async function pickTriageAgent(
             const answer = await rl.question(
                 `${theme.bold("Run triage with:")}\n${menu}\n${theme.cyan(theme.symbols.pointer)} `,
             )
-            const picked = matchTriagePickerAnswer(agents, answer)
+            const picked = matchTriagePickerAnswer(sortedAgents, answer)
             if (picked !== undefined) return picked
             output.write(`${theme.gold(`Enter a number from 1 to ${otherIndex}, an agent name or other`)}\n`)
         }
@@ -850,6 +854,70 @@ function defaultSpawnSession(request: TriageSpawnRequest): Promise<number> {
         child.once("error", rejectExit)
         child.once("exit", (code, signal) => resolveExit(code ?? (signal === null ? 0 : 1)))
     })
+}
+
+export interface ClipboardCandidate {
+    readonly command: string
+    readonly args: readonly string[]
+}
+
+/** Resolve OS clipboard commands for the current platform and display environment */
+export function resolveClipboardCandidates(
+    platform: NodeJS.Platform,
+    env: Readonly<Record<string, string | undefined>>,
+    text: string,
+): readonly ClipboardCandidate[] {
+    if (platform === "darwin") return [{ command: "pbcopy", args: [] }]
+    if (platform === "win32") {
+        // Windows clip.exe reads the legacy OEM code page, so fall back to printing non-ASCII paths rather than mangling them
+        if (/[^\x20-\x7e\r\n\t]/.test(text)) return []
+        return [{ command: "clip", args: [] }]
+    }
+    const candidates: ClipboardCandidate[] = []
+    if (env.WAYLAND_DISPLAY?.trim()) candidates.push({ command: "wl-copy", args: [] })
+    if (env.DISPLAY?.trim()) {
+        candidates.push({ command: "xclip", args: ["-selection", "clipboard"] })
+        candidates.push({ command: "xsel", args: ["--clipboard", "--input"] })
+    }
+    if ((env.WSL_DISTRO_NAME?.trim() || env.WSL_INTEROP?.trim()) && !/[^\x20-\x7e\r\n\t]/.test(text)) {
+        candidates.push({ command: "clip.exe", args: [] })
+    }
+    return candidates
+}
+
+function tryClipboardCommand(candidate: ClipboardCandidate, text: string, timeoutMs = 1500): Promise<boolean> {
+    return new Promise((resolveResult) => {
+        let settled = false
+        const finish = (ok: boolean) => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            resolveResult(ok)
+        }
+        const child = spawn(candidate.command, [...candidate.args], {
+            stdio: ["pipe", "ignore", "ignore"],
+            windowsHide: true,
+        })
+        const timer = setTimeout(() => {
+            child.kill()
+            finish(false)
+        }, timeoutMs)
+        child.once("error", () => finish(false))
+        child.once("exit", (code, signal) => finish(signal === null && code === 0))
+        child.stdin?.once("error", () => finish(false))
+        child.stdin?.end(text)
+    })
+}
+
+async function defaultCopyToClipboard(
+    text: string,
+    platform: NodeJS.Platform,
+    env: Readonly<Record<string, string | undefined>>,
+): Promise<boolean> {
+    for (const candidate of resolveClipboardCandidates(platform, env, text)) {
+        if (await tryClipboardCommand(candidate, text)) return true
+    }
+    return false
 }
 
 function resolveAgentStateDir(
@@ -1029,7 +1097,7 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
         selected = installed[0]
     } else if (installed.length > 1) {
         writeError(
-            "Multiple supported agent CLIs are installed and there is no terminal to pick one. Re-run with --agent claude, --agent codex, --agent antigravity, --agent opencode, --agent t3code, --agent other or --print",
+            "Multiple supported agent CLIs are installed and there is no terminal to pick one. Re-run with --agent antigravity, --agent claude, --agent codex, --agent opencode, --agent t3code, --agent other or --print",
         )
         return 1
     }
@@ -1037,9 +1105,20 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
     const hasInput = options.problem !== undefined || logExcerpt !== undefined || trace !== undefined
     const launchPrompt = buildTriageLaunchPrompt(session.promptFilePath, hasInput)
     if (useAgnosticHandoff || !selected) {
+        const copyFn =
+            environment.copyToClipboard ?? ((text: string) => defaultCopyToClipboard(text, platform, env))
+        let copied = false
+        try {
+            copied = await copyFn(launchPrompt)
+        } catch {
+            // allow-silent: Failed clipboard copies fall back to printing the prompt heading and text below
+        }
         const intro = useAgnosticHandoff
             ? "Use any coding agent with this redacted triage session"
-            : "No supported coding agent CLI (claude, codex, agy, opencode or t3) was found on PATH"
+            : "No supported coding agent CLI (agy, claude, codex, opencode or t3) was found on PATH"
+        const promptHeading = copied
+            ? "Prompt copied to the clipboard. Paste it into any coding agent, or run `fluxerly triage --print`:"
+            : "Paste this prompt into any coding agent, or run `fluxerly triage --print`:"
         environment.output.write(
             [
                 intro,
@@ -1047,7 +1126,7 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
                 "The triage playbook and project context were written to:",
                 ...sessionFiles,
                 "",
-                "Paste this prompt into any coding agent, or run `fluxerly triage --print`:",
+                promptHeading,
                 `  ${launchPrompt}`,
                 "",
             ].join("\n"),

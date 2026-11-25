@@ -490,6 +490,9 @@ part("water", ["/docs/commands/"], async () => {
     const { context, page } = await openPage({ width: 1920, height: 1080 }, "immersive")
     await page.goto(`${site.url}/docs/commands/`, { waitUntil: "load" })
     const clip = await page.evaluate(async () => {
+        // Freeze the water's clock phase so the bubble lands at the same height on every run instead of following Date.now()
+        const night = document.querySelector(".docs-night")
+        if (night instanceof HTMLElement) night.style.setProperty("--water-t", "0ms")
         for (const animation of document.getAnimations()) animation.pause()
         const bubble = document.querySelector('.docs-bubble:has(use[href="#crystal-gold"])')
         for (const element of document.querySelectorAll(".docs-main, .ray, .docs-bubble")) {
@@ -498,12 +501,16 @@ part("water", ["/docs/commands/"], async () => {
         const animation = bubble?.getAnimations()[0]
         if (!animation) return null
         const length = animation.effect.getComputedTiming().duration
-        let [most, when] = [0, 0]
+        const midY = innerHeight / 2
+        let [most, bestDistance, when] = [0, Number.POSITIVE_INFINITY, 0]
         for (let step = 0; step < 40; step++) {
             animation.currentTime = (length * step) / 40
             const box = bubble.getBoundingClientRect()
             const light = Number(getComputedStyle(bubble).opacity)
-            if (light > most && box.top > 200 && box.bottom < innerHeight - 20) [most, when] = [light, animation.currentTime]
+            const distance = Math.abs((box.top + box.bottom) / 2 - midY)
+            if (box.top > 200 && box.bottom < innerHeight - 20 && (light > most || (light === most && distance < bestDistance))) {
+                ;[most, bestDistance, when] = [light, distance, animation.currentTime]
+            }
         }
         animation.currentTime = when
         await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))

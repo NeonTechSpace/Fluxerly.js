@@ -69,7 +69,7 @@ const optionGroups: readonly {
         rows: [
             ["[problem]", "Optional short description of what went wrong to pass into triage context"],
             [
-                "--agent claude|codex|antigravity|opencode|t3code|other",
+                "--agent antigravity|claude|codex|opencode|t3code|other",
                 "Chooses which coding agent CLI to start, or other for a harness-agnostic prompt",
             ],
             ["--model <id>", "Passes a model identifier through to the chosen agent CLI"],

@@ -11,6 +11,7 @@ import {
     matchTriagePickerAnswer,
     parseTriageArguments,
     redactHomePath,
+    resolveClipboardCandidates,
     runTriage,
     triageAgents,
     type TriageSpawnRequest,
@@ -190,7 +191,14 @@ describe("fluxerly triage playbook, argument parsing and helpers", () => {
         expect(redactHomePath("/home/alice/bots/my-bot", "/home/alice")).toBe("~/bots/my-bot")
         expect(redactHomePath("/home/alice2/bots", "/home/alice")).toBe("/home/alice2/bots")
         expect(redactHomePath("C:\\Users\\Alice\\bot", "C:\\Users\\Alice")).toBe("~\\bot")
-        expect(matchTriageAgentAnswer(triageAgents, "1")?.id).toBe("claude")
+        expect(triageAgents.map((agent) => agent.label)).toEqual([
+            "Antigravity",
+            "Claude Code",
+            "Codex",
+            "OpenCode",
+            "T3 Code",
+        ])
+        expect(matchTriageAgentAnswer(triageAgents, "1")?.id).toBe("antigravity")
         expect(matchTriageAgentAnswer(triageAgents, "codex")?.id).toBe("codex")
         expect(matchTriageAgentAnswer(triageAgents, "agy")?.id).toBe("antigravity")
         expect(matchTriageAgentAnswer(triageAgents, "opencode")?.id).toBe("opencode")
@@ -453,6 +461,35 @@ describe("fluxerly triage execution modes", () => {
         expect(skippedCalls).toHaveLength(0)
         expect(otherOut.read()).toContain("Use any coding agent")
         expect(otherOut.read()).toContain("triage-prompt.md")
+
+        // Interactive TTY picker sorts detected agents alphabetically with Other always last
+        const allTtyIn = new PassThrough() as PassThrough & { isTTY?: boolean }
+        allTtyIn.isTTY = true
+        allTtyIn.end("6\n")
+        const allTtyOut = captureStream({ isTTY: true, columns: 80, rows: 24, depth: 0 })
+        expect(
+            await runTriage([], {
+                project,
+                packageRoot: sdkRoot,
+                input: allTtyIn,
+                output: allTtyOut.stream,
+                errorOutput: captureStream().stream,
+                env: {},
+                platform: "linux",
+                sessionRoot: sessions,
+                detectCommand: (cmd) => `/bin/${cmd}`,
+                copyToClipboard: async () => false,
+            }),
+        ).toBe(0)
+        const allMenu = allTtyOut.read()
+        expect(allMenu).toContain("[1] Antigravity")
+        expect(allMenu).toContain("[2] Claude Code")
+        expect(allMenu).toContain("[3] Codex")
+        expect(allMenu).toContain("[4] OpenCode")
+        expect(allMenu).toContain("[5] T3 Code")
+        expect(allMenu).toContain("[6] Other coding agent")
+        expect(allMenu.indexOf("[1] Antigravity")).toBeLessThan(allMenu.indexOf("[2] Claude Code"))
+        expect(allMenu.indexOf("[5] T3 Code")).toBeLessThan(allMenu.indexOf("[6] Other coding agent"))
 
         // Interactive TTY picker offers Other even when only one CLI is installed
         const singleTtyIn = new PassThrough() as PassThrough & { isTTY?: boolean }
@@ -761,5 +798,83 @@ describe("fluxerly triage execution modes", () => {
             }
             expect(inheritedAlive).toBe(false)
         }
+    })
+
+    test("auto-copies the launch prompt on agnostic handoff and falls back silently when clipboard is unavailable", async () => {
+        expect(resolveClipboardCandidates("darwin", {}, "Read prompt")).toEqual([{ command: "pbcopy", args: [] }])
+        expect(resolveClipboardCandidates("win32", {}, "Read prompt")).toEqual([{ command: "clip", args: [] }])
+        expect(resolveClipboardCandidates("win32", {}, "Read C:\\café\\prompt.md")).toEqual([])
+        expect(resolveClipboardCandidates("linux", {}, "Read prompt")).toEqual([])
+        expect(resolveClipboardCandidates("linux", { WAYLAND_DISPLAY: "wayland-0", DISPLAY: ":0" }, "Read prompt")).toEqual([
+            { command: "wl-copy", args: [] },
+            { command: "xclip", args: ["-selection", "clipboard"] },
+            { command: "xsel", args: ["--clipboard", "--input"] },
+        ])
+        expect(resolveClipboardCandidates("linux", { WSL_DISTRO_NAME: "Ubuntu" }, "Read prompt")).toEqual([
+            { command: "clip.exe", args: [] },
+        ])
+
+        const project = makeTempDir("fluxerly-triage-clipboard-")
+        writeFileSync(join(project, "package.json"), JSON.stringify({ name: "bot", type: "module" }), "utf8")
+
+        const copiedTexts: string[] = []
+        const copiedOut = captureStream()
+        expect(
+            await runTriage(["--agent", "other", "gateway drops"], {
+                project,
+                packageRoot: sdkRoot,
+                input: new PassThrough(),
+                output: copiedOut.stream,
+                errorOutput: captureStream().stream,
+                env: {},
+                platform: "linux",
+                detectCommand: () => "/usr/bin/claude",
+                copyToClipboard: async (text) => {
+                    copiedTexts.push(text)
+                    return true
+                },
+            }),
+        ).toBe(0)
+        expect(copiedTexts).toHaveLength(1)
+        expect(copiedTexts[0]).toContain("triage-prompt.md")
+        expect(copiedOut.read()).toContain("Prompt copied to the clipboard")
+        expect(copiedOut.read()).toContain(copiedTexts[0]!)
+
+        const failedOut = captureStream()
+        expect(
+            await runTriage(["--agent", "other"], {
+                project,
+                packageRoot: sdkRoot,
+                input: new PassThrough(),
+                output: failedOut.stream,
+                errorOutput: captureStream().stream,
+                env: {},
+                platform: "linux",
+                detectCommand: () => "/usr/bin/claude",
+                copyToClipboard: async () => {
+                    throw new Error("clipboard unavailable")
+                },
+            }),
+        ).toBe(0)
+        expect(failedOut.read()).toContain("Paste this prompt into any coding agent")
+        expect(failedOut.read()).not.toContain("Prompt copied to the clipboard")
+
+        let printCopied = false
+        expect(
+            await runTriage(["--print"], {
+                project,
+                packageRoot: sdkRoot,
+                input: new PassThrough(),
+                output: captureStream().stream,
+                errorOutput: captureStream().stream,
+                env: {},
+                platform: "linux",
+                copyToClipboard: async () => {
+                    printCopied = true
+                    return true
+                },
+            }),
+        ).toBe(0)
+        expect(printCopied).toBe(false)
     })
 })
