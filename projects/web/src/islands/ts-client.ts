@@ -4,6 +4,7 @@
 import type {
     MainToTsWorkerMessage,
     TsAssetManifest,
+    TsChannel,
     TsCompletionDetails,
     TsCompletionItem,
     TsDiagnostic,
@@ -40,6 +41,10 @@ class PlaygroundTsClient {
     private bootPromise: Promise<boolean> | null = null
     private bootToken = 0
     private bootAbort: AbortController | null = null
+    private channelAbort: AbortController | null = null
+    private channelToken = 0
+    private activeChannel: TsChannel = "stable"
+    private cachedManifest: TsAssetManifest | null = null
     private consecutiveFailures = 0
     private nextRetryAt = 0
 
@@ -102,6 +107,10 @@ class PlaygroundTsClient {
             this.bootAbort.abort()
             this.bootAbort = null
         }
+        if (this.channelAbort) {
+            this.channelAbort.abort()
+            this.channelAbort = null
+        }
         if (this.worker) {
             this.worker.terminate()
             this.worker = null
@@ -109,6 +118,67 @@ class PlaygroundTsClient {
         if (this.diagnosticsTimer !== undefined) {
             window.clearTimeout(this.diagnosticsTimer)
             this.diagnosticsTimer = undefined
+        }
+    }
+
+    private resolveChannelUrls(manifest: TsAssetManifest, channel: TsChannel): { coreTypesUrl: string; effectTypesUrl: string } {
+        if (channel === "nightly" && manifest.nightly) {
+            return {
+                coreTypesUrl: manifest.nightly.coreTypesUrl,
+                effectTypesUrl: manifest.nightly.effectTypesUrl,
+            }
+        }
+        return {
+            coreTypesUrl: manifest.coreTypesUrl,
+            effectTypesUrl: manifest.effectTypesUrl,
+        }
+    }
+
+    async setChannel(channel: TsChannel, fileName: string, code: string): Promise<boolean> {
+        const docChanged = fileName !== this.latestFileName || code !== this.latestCode
+        this.latestFileName = fileName
+        this.latestCode = code
+        if (docChanged) this.latestVersion += 1
+
+        if (this.activeChannel === channel) return this.status.state === "ready"
+        this.activeChannel = channel
+
+        // If the worker has not booted yet, the selected channel will be loaded when ensureStarted runs
+        if (this.status.state !== "ready" || !this.worker) {
+            return false
+        }
+
+        const token = ++this.channelToken
+        this.channelAbort?.abort()
+        const abort = new AbortController()
+        this.channelAbort = abort
+        const worker = this.worker
+
+        try {
+            const manifest = this.cachedManifest ?? (await this.fetchManifest(abort.signal, false))
+            this.cachedManifest = manifest
+            const { coreTypesUrl, effectTypesUrl } = this.resolveChannelUrls(manifest, channel)
+            const response = await fetch(coreTypesUrl, { signal: abort.signal })
+            if (!response.ok) throw new Error(`Could not load ${channel} TypeScript types (HTTP ${response.status})`)
+            const coreBuffer = await response.arrayBuffer()
+            if (token !== this.channelToken || this.worker !== worker) return false
+            worker.postMessage(
+                {
+                    type: "switchChannel",
+                    coreTypesUrl,
+                    effectTypesUrl,
+                    coreBuffer,
+                    fileName: this.latestFileName,
+                    code: this.latestCode,
+                    version: this.latestVersion,
+                } satisfies MainToTsWorkerMessage,
+                [coreBuffer],
+            )
+            return true
+        } catch (error) {
+            if (abort.signal.aborted) return false
+            console.error(`Playground failed to switch TypeScript types to ${channel}:`, error)
+            return false
         }
     }
 
@@ -184,11 +254,14 @@ class PlaygroundTsClient {
 
         const manifest = await this.fetchManifest(abort.signal, forceManifestReload)
         if (token !== this.bootToken) return false
+        this.cachedManifest = manifest
+        const bootChannel = this.activeChannel
+        const { coreTypesUrl, effectTypesUrl } = this.resolveChannelUrls(manifest, bootChannel)
 
-        // Download Worker script and core type bundle in parallel so both arrive in one RTT
+        // Download Worker script and active channel's core type bundle in parallel so both arrive in one RTT
         const worker = new Worker(manifest.workerUrl)
         this.worker = worker
-        const coreBufferPromise = fetch(manifest.coreTypesUrl, { signal: abort.signal }).then(async (response) => {
+        const coreBufferPromise = fetch(coreTypesUrl, { signal: abort.signal }).then(async (response) => {
             if (!response.ok) throw new Error(`Could not load TypeScript types (HTTP ${response.status})`)
             return response.arrayBuffer()
         })
@@ -228,6 +301,14 @@ class PlaygroundTsClient {
                     this.consecutiveFailures = 0
                     this.nextRetryAt = 0
                     this.setStatus({ state: "ready", bootMs: msg.bootMs, hasEffect: msg.hasEffect })
+                    // If user toggled channels while initial boot was in flight, immediately switch types to activeChannel
+                    if (!settled && this.activeChannel !== bootChannel) {
+                        const targetChannel = this.activeChannel
+                        this.activeChannel = bootChannel
+                        void this.setChannel(targetChannel, this.latestFileName, this.latestCode)
+                        finish(true)
+                        return
+                    }
                     if (msg.fileName === this.latestFileName && msg.version === this.latestVersion) {
                         for (const listener of this.diagnosticsListeners) {
                             listener(msg.fileName, msg.version, msg.diagnostics)
@@ -317,8 +398,8 @@ class PlaygroundTsClient {
                     worker.postMessage(
                         {
                             type: "init",
-                            coreTypesUrl: manifest.coreTypesUrl,
-                            effectTypesUrl: manifest.effectTypesUrl,
+                            coreTypesUrl,
+                            effectTypesUrl,
                             coreBuffer,
                             fileName: this.latestFileName,
                             code: this.latestCode,

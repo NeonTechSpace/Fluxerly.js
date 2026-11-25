@@ -11,6 +11,7 @@ import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { channelTargets, compareVersions, npmDeprecations, parseVersion, validateSnapshot } from "../versions.js"
+import { prepareNightlySdkDir, selectPlaygroundNightly } from "../playground-channels.mjs"
 import { snapshotContent } from "./snapshot-content.mjs"
 import { writeSearchWords } from "./search-words.mjs"
 
@@ -51,11 +52,23 @@ async function readRegistry() {
     if (!response.ok) throw new Error(`${url} answered ${response.status}`)
     return response.json()
 }
+let registry
 let deprecated
 try {
-    deprecated = npmDeprecations(await readRegistry(), [...snapshots.keys()])
+    registry = await readRegistry()
+    deprecated = npmDeprecations(registry, [...snapshots.keys()])
 } catch (error) {
     throw new Error(`The public build reads npm's registry to mark deprecated versions in the version menu, and couldn't: ${error.message}. It stops rather than leave a deprecation out`, { cause: error })
+}
+// Optional Nightly SDK channel for the Playground: built only when npm @nightly is strictly newer than Stable
+let playgroundNightlyDir = ""
+let playgroundNightlyVersion = ""
+if (registryAt < 0 && newest.label === "Stable") {
+    const nightlyTarget = selectPlaygroundNightly(registry, newest.version)
+    if (nightlyTarget) {
+        playgroundNightlyDir = await prepareNightlySdkDir(nightlyTarget)
+        playgroundNightlyVersion = nightlyTarget.version
+    }
 }
 const versionEntry = (target) => ({ label: target.label, version: target.version, base: baseOf(target), ...(deprecated[target.version] ? { deprecated: deprecated[target.version] } : {}) })
 const shown = channels.map(versionEntry)
@@ -94,6 +107,9 @@ async function build(target, outDir) {
             ...(isNewest && target.label === "Stable" ? {} : { DOCS_PACKAGE_SPEC: `${packageName}@${target.version}` }),
             // The homepage's short command, for a site with no Stable yet
             ...(isNewest && target.label !== "Stable" ? { PUBLIC_PACKAGE_SPEC: `${packageName}@nightly` } : {}),
+            ...(isNewest && playgroundNightlyDir
+                ? { PLAYGROUND_NIGHTLY_SDK_DIR: playgroundNightlyDir, PLAYGROUND_NIGHTLY_VERSION: playgroundNightlyVersion }
+                : {}),
         },
     })
 }

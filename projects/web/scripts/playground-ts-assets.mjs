@@ -321,11 +321,11 @@ function toPosix(filePath) {
     return filePath.replaceAll("\\", "/")
 }
 
-function resolvePackageRoots() {
+function resolvePackageRoots(targetSdkRoot = sdkRoot) {
     const tsLibDir = dirname(requireFromWeb.resolve("typescript/lib/lib.es2022.d.ts"))
     const effectDistDir = dirname(requireFromWeb.resolve("effect/Effect"))
-    const sdkDistDir = join(sdkRoot, "dist")
-    const neverthrowPkgPath = requireFromWeb.resolve("neverthrow/package.json", { paths: [sdkRoot, webRoot] })
+    const sdkDistDir = join(targetSdkRoot, "dist")
+    const neverthrowPkgPath = requireFromWeb.resolve("neverthrow/package.json", { paths: [targetSdkRoot, sdkRoot, webRoot] })
     const neverthrowDistDir = join(dirname(neverthrowPkgPath), "dist")
     return { tsLibDir, effectDistDir, sdkDistDir, neverthrowDistDir }
 }
@@ -393,8 +393,8 @@ function collectTransitiveDts(probeCode, roots) {
     return collected
 }
 
-export async function buildPlaygroundTypeBundles() {
-    const roots = resolvePackageRoots()
+export async function buildPlaygroundTypeBundles({ sdkRoot: targetSdkRoot = sdkRoot } = {}) {
+    const roots = resolvePackageRoots(targetSdkRoot)
 
     // Ensure the built SDK declarations exist before tracing
     await readFile(join(roots.sdkDistDir, "index.d.ts"), "utf8")
@@ -467,18 +467,50 @@ export async function bundlePlaygroundTsWorker({ minify = true } = {}) {
     return output.text
 }
 
-export async function buildPlaygroundTsAssets({ minify = true } = {}) {
-    const [workerCode, types] = await Promise.all([
+export async function buildPlaygroundTsAssets({ minify = true, stableSdkRoot = sdkRoot, nightlySdkRoot = "" } = {}) {
+    const [workerCode, stableTypes, stablePkgRaw, nightlyBundle] = await Promise.all([
         bundlePlaygroundTsWorker({ minify }),
-        buildPlaygroundTypeBundles(),
+        buildPlaygroundTypeBundles({ sdkRoot: stableSdkRoot }),
+        readFile(join(stableSdkRoot, "package.json"), "utf8"),
+        nightlySdkRoot
+            ? Promise.all([
+                  buildPlaygroundTypeBundles({ sdkRoot: nightlySdkRoot }),
+                  readFile(join(nightlySdkRoot, "package.json"), "utf8"),
+              ])
+            : null,
     ])
+    const stableVersion = JSON.parse(stablePkgRaw).version ?? "0.0.0"
     const workerFile = `ts-${shortHash(workerCode)}.js`
-    const coreFile = `types-core-${shortHash(types.coreJson)}.json`
-    const effectFile = `types-effect-${shortHash(types.effectJson)}.json`
+    const coreFile = `types-core-${shortHash(stableTypes.coreJson)}.json`
+    const effectFile = `types-effect-${shortHash(stableTypes.effectJson)}.json`
+
+    let nightlyAssets = null
+    if (nightlyBundle) {
+        const [nightlyTypes, nightlyPkgRaw] = nightlyBundle
+        const nightlyVersion = JSON.parse(nightlyPkgRaw).version ?? ""
+        const nightlyCoreFile = `types-nightly-core-${shortHash(nightlyTypes.coreJson)}.json`
+        const nightlyEffectFile = `types-nightly-effect-${shortHash(nightlyTypes.effectJson)}.json`
+        nightlyAssets = {
+            version: nightlyVersion,
+            coreFile: nightlyCoreFile,
+            coreJson: nightlyTypes.coreJson,
+            effectFile: nightlyEffectFile,
+            effectJson: nightlyTypes.effectJson,
+            manifest: {
+                version: nightlyVersion,
+                runtimeUrl: "/playground/runtime-nightly.js",
+                coreTypesUrl: `/playground/${nightlyCoreFile}`,
+                effectTypesUrl: `/playground/${nightlyEffectFile}`,
+            },
+        }
+    }
+
     const manifest = {
+        stableVersion,
         workerUrl: `/playground/${workerFile}`,
         coreTypesUrl: `/playground/${coreFile}`,
         effectTypesUrl: `/playground/${effectFile}`,
+        nightly: nightlyAssets ? nightlyAssets.manifest : null,
     }
     return {
         manifest,
@@ -486,8 +518,9 @@ export async function buildPlaygroundTsAssets({ minify = true } = {}) {
         workerFile,
         workerCode,
         coreFile,
-        coreJson: types.coreJson,
+        coreJson: stableTypes.coreJson,
         effectFile,
-        effectJson: types.effectJson,
+        effectJson: stableTypes.effectJson,
+        nightly: nightlyAssets,
     }
 }

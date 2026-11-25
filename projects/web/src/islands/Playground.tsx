@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react"
 import {
     ArrowClockwiseIcon,
     CheckIcon,
+    InfoIcon,
     LightningIcon,
     PaperPlaneTiltIcon,
     PlayIcon,
@@ -25,7 +26,8 @@ import type {
     SandboxToParentMessage,
 } from "../playground-runtime/protocol"
 import CodeEditor, { type CodeEditorJumpTarget } from "./CodeEditor"
-import type { TsDiagnostic } from "../playground-ts/protocol"
+import type { TsChannel, TsDiagnostic } from "../playground-ts/protocol"
+import { playgroundTsClient } from "./ts-client"
 import { getPreset, playgroundPresets, type PlaygroundPreset } from "./playground-presets"
 import "./playground.css"
 
@@ -57,25 +59,32 @@ const emptyTelemetry: SandboxTelemetry = {
     failures: 0,
 }
 
-let runtimeScriptPromise: Promise<string> | undefined
+const runtimeScriptPromises = new Map<string, Promise<string>>()
 const maxShareTokenChars = 65_536
 const maxSharePayloadBytes = 65_536
 const maxChatItems = 120
 const runTimeoutMs = 8_000
 
-function loadRuntimeScript(): Promise<string> {
-    if (!runtimeScriptPromise) {
-        runtimeScriptPromise = fetch("/playground/runtime.js", { cache: "no-cache" })
+function runtimeUrlForChannel(channel: TsChannel): string {
+    return channel === "nightly" ? "/playground/runtime-nightly.js" : "/playground/runtime.js"
+}
+
+function loadRuntimeScript(channel: TsChannel): Promise<string> {
+    const url = runtimeUrlForChannel(channel)
+    let pending = runtimeScriptPromises.get(url)
+    if (!pending) {
+        pending = fetch(url, { cache: "no-cache" })
             .then(async (response) => {
                 if (!response.ok) throw new Error(`Could not load playground runtime (HTTP ${response.status})`)
                 return response.text()
             })
             .catch((error: unknown) => {
-                runtimeScriptPromise = undefined
+                runtimeScriptPromises.delete(url)
                 throw error
             })
+        runtimeScriptPromises.set(url, pending)
     }
-    return runtimeScriptPromise
+    return pending
 }
 
 function buildSandboxSrcDoc(runtimeScript: string): string {
@@ -261,9 +270,18 @@ function EmbedPreview({ embed }: { readonly embed: SandboxEmbed }) {
     )
 }
 
-export default function Playground() {
+export interface PlaygroundProps {
+    readonly stableVersion?: string
+    readonly nightlyVersion?: string
+}
+
+export default function Playground({ stableVersion = "", nightlyVersion }: PlaygroundProps = {}) {
     const baseId = useId()
     const [still, setStill] = useState(false)
+    const [sdkChannel, setSdkChannel] = useState<TsChannel>("stable")
+    const [runtimeReloadSeq, setRuntimeReloadSeq] = useState(0)
+    const [nightlyInfoOpen, setNightlyInfoOpen] = useState(false)
+    const channelSwitchRef = useRef<HTMLDivElement>(null)
     const [presetId, setPresetId] = useState<string>(playgroundPresets[0]!.id)
     const [mode, setMode] = useState<SandboxMode>(playgroundPresets[0]!.mode)
     const [code, setCode] = useState<string>(playgroundPresets[0]!.code)
@@ -400,12 +418,19 @@ export default function Playground() {
         }
     }, [])
 
-    // Lazily fetch the pre-bundled browser SDK runtime once and build the sandbox srcDoc
-    const ensureRuntimeLoaded = useCallback(() => {
+    // Lazily fetch only the selected channel's pre-bundled browser SDK runtime (Stable by default, Nightly only on click)
+    useEffect(() => {
         let cancelled = false
-        loadRuntimeScript()
+        setBootState("loading")
+        setBootError(null)
+        setInteractive(false)
+        setRunning(false)
+        loadRuntimeScript(sdkChannel)
             .then((script) => {
-                if (!cancelled) setIframeSrcDoc(buildSandboxSrcDoc(script))
+                if (!cancelled) {
+                    setIframeSrcDoc(buildSandboxSrcDoc(script))
+                    setIframeKey((key) => key + 1)
+                }
             })
             .catch((error: unknown) => {
                 if (!cancelled) {
@@ -416,9 +441,40 @@ export default function Playground() {
         return () => {
             cancelled = true
         }
-    }, [])
+    }, [sdkChannel, runtimeReloadSeq])
 
-    useEffect(() => ensureRuntimeLoaded(), [ensureRuntimeLoaded])
+    useEffect(() => {
+        if (!nightlyInfoOpen) return
+        const onPointerDown = (event: PointerEvent) => {
+            if (!channelSwitchRef.current?.contains(event.target as Node)) setNightlyInfoOpen(false)
+        }
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") setNightlyInfoOpen(false)
+        }
+        document.addEventListener("pointerdown", onPointerDown)
+        document.addEventListener("keydown", onKeyDown)
+        return () => {
+            document.removeEventListener("pointerdown", onPointerDown)
+            document.removeEventListener("keydown", onKeyDown)
+        }
+    }, [nightlyInfoOpen])
+
+    const selectSdkChannel = useCallback(
+        (next: TsChannel) => {
+            if (next === "nightly" && !nightlyVersion) {
+                setNightlyInfoOpen((open) => !open)
+                return
+            }
+            setNightlyInfoOpen(false)
+            if (next === sdkChannel) return
+            clearRunWatchdog()
+            runSeqRef.current += 1
+            pendingRestartRunRef.current = null
+            setSdkChannel(next)
+            void playgroundTsClient.setChannel(next, activePreset.filename, latestCodeRef.current)
+        },
+        [activePreset.filename, clearRunWatchdog, nightlyVersion, sdkChannel],
+    )
 
     useEffect(
         () => () => {
@@ -701,7 +757,7 @@ export default function Playground() {
         pendingRestartRunRef.current = { code: preset.code, mode: preset.mode }
         setBootState("loading")
         if (!iframeSrcDoc) {
-            ensureRuntimeLoaded()
+            setRuntimeReloadSeq((previous) => previous + 1)
         } else {
             setIframeKey((previous) => previous + 1)
         }
@@ -785,6 +841,72 @@ export default function Playground() {
                 />
             )}
 
+            <header className="pg-head">
+                <h1 className="page-title" id="page-title">
+                    <span className="hi">Fluxerly</span> SDK Sandbox
+                </h1>
+                <div className="pg-channel-bar">
+                    {(sdkVersion || (sdkChannel === "nightly" ? nightlyVersion : stableVersion)) && (
+                        <span
+                            className="pg-sdk-tag"
+                            title={`@neontechspace/fluxerly@${sdkVersion || (sdkChannel === "nightly" ? nightlyVersion : stableVersion)}`}
+                        >
+                            v{sdkVersion || (sdkChannel === "nightly" ? nightlyVersion : stableVersion)}
+                        </span>
+                    )}
+                    <div
+                        ref={channelSwitchRef}
+                        className="pg-channel-switch"
+                        role="group"
+                        aria-label="SDK release channel"
+                        data-info-open={nightlyInfoOpen ? "true" : undefined}
+                    >
+                        <button
+                            type="button"
+                            className="pg-channel-btn"
+                            data-active={sdkChannel === "stable" ? "" : undefined}
+                            aria-pressed={sdkChannel === "stable"}
+                            onClick={() => selectSdkChannel("stable")}
+                        >
+                            Stable
+                        </button>
+                        <span className="pg-channel-nightly-wrap">
+                            <button
+                                type="button"
+                                className="pg-channel-btn"
+                                data-active={sdkChannel === "nightly" ? "" : undefined}
+                                data-info-open={nightlyInfoOpen ? "" : undefined}
+                                aria-pressed={sdkChannel === "nightly"}
+                                aria-disabled={!nightlyVersion}
+                                aria-describedby={!nightlyVersion ? `${baseId}-nightly-info` : undefined}
+                                title={nightlyVersion ? `Switch to Nightly v${nightlyVersion}` : undefined}
+                                onClick={() => selectSdkChannel("nightly")}
+                            >
+                                <span className="pg-channel-label">Nightly</span>
+                                {!nightlyVersion && (
+                                    <span className="pg-channel-info-icon" aria-hidden="true">
+                                        <InfoIcon size={15} weight="bold" />
+                                    </span>
+                                )}
+                            </button>
+                            {!nightlyVersion && (
+                                <div
+                                    id={`${baseId}-nightly-info`}
+                                    role="tooltip"
+                                    className="pg-channel-info"
+                                    data-open={nightlyInfoOpen ? "true" : undefined}
+                                >
+                                    <strong className="pg-channel-info-title">Nightly matches Stable</strong>
+                                    <p className="pg-channel-info-body">
+                                        Stable {sdkVersion || stableVersion ? `v${sdkVersion || stableVersion}` : "release"} already includes the latest changes. Nightly unlocks when a newer prerelease ships
+                                    </p>
+                                </div>
+                            )}
+                        </span>
+                    </div>
+                </div>
+            </header>
+
             <div className="pg-toolbar glass">
                 <div className="pg-presets" role="group" aria-label="SDK Examples">
                     {playgroundPresets.map((preset) => (
@@ -849,7 +971,6 @@ export default function Playground() {
                         <div className="pg-file-meta">
                             <TerminalWindowIcon size={18} weight="duotone" className="pg-file-icon" aria-hidden="true" />
                             <span className="pg-file-name">{activePreset.filename}</span>
-                            {sdkVersion && <span className="pg-sdk-tag">v{sdkVersion}</span>}
                             {tsDiagnostics.length > 0 && (
                                 <button
                                     type="button"

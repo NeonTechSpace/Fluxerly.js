@@ -1,9 +1,20 @@
 // Typed message protocol between the main-thread CodeMirror editor and the static TypeScript 6.0 Web Worker
 
+export type TsChannel = "stable" | "nightly"
+
+export interface TsNightlyManifest {
+    readonly version: string
+    readonly runtimeUrl: string
+    readonly coreTypesUrl: string
+    readonly effectTypesUrl: string
+}
+
 export interface TsAssetManifest {
+    readonly stableVersion?: string
     readonly workerUrl: string
     readonly coreTypesUrl: string
     readonly effectTypesUrl: string
+    readonly nightly?: TsNightlyManifest | null
 }
 
 export interface TsDiagnostic {
@@ -54,6 +65,15 @@ export type MainToTsWorkerMessage =
           readonly fileName: string
           readonly code: string
           readonly version?: number
+      }
+    | {
+          readonly type: "switchChannel"
+          readonly coreTypesUrl: string
+          readonly effectTypesUrl: string
+          readonly coreBuffer?: ArrayBuffer
+          readonly fileName: string
+          readonly code: string
+          readonly version: number
       }
     | {
           readonly type: "update"

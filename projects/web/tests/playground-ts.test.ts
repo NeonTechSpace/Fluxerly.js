@@ -3,6 +3,7 @@ import { test } from "node:test"
 import vm from "node:vm"
 import { brotliCompressSync, gzipSync } from "node:zlib"
 import { buildPlaygroundTsAssets } from "../scripts/playground-ts-assets.mjs"
+import { selectPlaygroundNightly } from "../scripts/playground-channels.mjs"
 import { playgroundPresets } from "../src/islands/playground-presets.ts"
 import type { MainToTsWorkerMessage, TsCompletionDetails, TsCompletionItem, TsDiagnostic, TsQuickInfo } from "../src/playground-ts/protocol.ts"
 
@@ -336,4 +337,61 @@ export { note, badColor, badCard }
         (msg) => msg.type === "diagnosticsResult" && msg.id === unsupportedId,
     )
     assert.ok(unsupportedRes.diagnostics.some((d) => d.message.includes("Schema")))
+
+    // 8. Reusing the same TS 6.0 worker across a channel switch reloads core types cleanly
+    const swappedCore = JSON.parse(harness.assets.coreJson) as { files: Record<string, string> }
+    swappedCore.files["/node_modules/@neontechspace/fluxerly/dist/index.d.ts"] += "\nexport declare const nightlyChannelMarker: 1\n"
+    const swappedBytes = new TextEncoder().encode(JSON.stringify(swappedCore))
+    harness.send({
+        type: "switchChannel",
+        coreTypesUrl: harness.assets.manifest.coreTypesUrl,
+        effectTypesUrl: harness.assets.manifest.effectTypesUrl,
+        coreBuffer: swappedBytes.buffer.slice(swappedBytes.byteOffset, swappedBytes.byteOffset + swappedBytes.byteLength),
+        fileName: "bot.ts",
+        code: `import { nightlyChannelMarker } from "@neontechspace/fluxerly"\nexport const n: 1 = nightlyChannelMarker`,
+        version: version++,
+    })
+    const switchedReady = await harness.next<{ type: "ready"; diagnostics: TsDiagnostic[] }>((msg) => msg.type === "ready")
+    assert.deepEqual(switchedReady.diagnostics, [], "Switched channel types should resolve nightly-only exports cleanly")
+})
+
+test("selectPlaygroundNightly enables Nightly only when strictly newer than Stable with valid npm integrity", () => {
+    const tarball = "https://registry.npmjs.org/@neontechspace/fluxerly/-/fluxerly-1003.1.2-nightly.20261126.1.tgz"
+    const integrity = "sha512-abcdef123456=="
+
+    // Nightly older than Stable (current state after 1003.1.1 release) -> disabled (null)
+    assert.equal(
+        selectPlaygroundNightly(
+            {
+                "dist-tags": { latest: "1003.1.1", nightly: "1003.1.1-nightly.20261125.111" },
+                versions: { "1003.1.1-nightly.20261125.111": { dist: { tarball, integrity } } },
+            },
+            "1003.1.1",
+        ),
+        null,
+    )
+
+    // Nightly strictly newer than Stable -> enabled with verified metadata
+    assert.deepEqual(
+        selectPlaygroundNightly(
+            {
+                "dist-tags": { latest: "1003.1.1", nightly: "1003.1.2-nightly.20261126.1" },
+                versions: { "1003.1.2-nightly.20261126.1": { dist: { tarball, integrity } } },
+            },
+            "1003.1.1",
+        ),
+        { version: "1003.1.2-nightly.20261126.1", tarball, integrity },
+    )
+
+    // Untrusted tarball host or missing sha512 integrity -> rejected (null)
+    assert.equal(
+        selectPlaygroundNightly(
+            {
+                "dist-tags": { latest: "1003.1.1", nightly: "1003.1.2-nightly.20261126.1" },
+                versions: { "1003.1.2-nightly.20261126.1": { dist: { tarball: "https://evil.example/pkg.tgz", integrity } } },
+            },
+            "1003.1.1",
+        ),
+        null,
+    )
 })

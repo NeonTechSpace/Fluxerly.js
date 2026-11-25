@@ -142,6 +142,22 @@ function setVirtualFile(filePath: string, text: string, version?: number): boole
     return true
 }
 
+function resetLibraryFiles(): void {
+    const kept = new Map<string, VirtualFile>()
+    for (const [path, entry] of files) {
+        if (path.startsWith(`${rootDir}/`)) kept.set(path, entry)
+    }
+    files.clear()
+    directories.clear()
+    directoryFiles.clear()
+    for (const [path, entry] of kept) {
+        files.set(path, entry)
+        indexPath(path)
+    }
+    effectLoaded = false
+    effectLoadingPromise = undefined
+}
+
 function loadFilesMap(record: Record<string, string>): number {
     let added = 0
     for (const [rawPath, text] of Object.entries(record)) {
@@ -525,6 +541,34 @@ async function processMessage(message: MainToTsWorkerMessage): Promise<void> {
             hasEffect: effectLoaded,
             fileName: message.fileName,
             version: initVersion,
+            diagnostics,
+        })
+        return
+    }
+
+    if (message.type === "switchChannel") {
+        const start = performance.now()
+        effectTypesUrl = message.effectTypesUrl
+        const coreFiles = message.coreBuffer ? parseTypesBuffer(message.coreBuffer) : await fetchTypesJson(message.coreTypesUrl)
+        resetLibraryFiles()
+        loadFilesMap(coreFiles)
+        activeFileName = toPlaygroundFile(message.fileName)
+        setVirtualFile(activeFileName, message.code, message.version)
+        if (importsEffect(message.code)) {
+            await ensureEffectTypesLoaded(message.code)
+        }
+        resetModuleResolutionCache()
+        projectVersion += 1
+        languageService ??= createService()
+        const entry = files.get(activeFileName)
+        const diagnostics = entry ? collectDiagnostics(languageService, activeFileName, entry) : []
+        post({
+            type: "ready",
+            bootMs: Math.round(performance.now() - start),
+            fileCount: files.size,
+            hasEffect: effectLoaded,
+            fileName: message.fileName,
+            version: message.version,
             diagnostics,
         })
         return

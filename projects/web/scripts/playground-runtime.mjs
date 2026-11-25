@@ -36,10 +36,16 @@ const shimMap = new Map([
     ["ws", join(shimsRoot, "node-misc.ts")],
 ])
 
-function createShimPlugin() {
+function createShimPlugin(targetSdkRoot = sdkRoot) {
     return {
         name: "fluxerly-browser-shims",
         setup(pluginBuild) {
+            if (resolve(targetSdkRoot) !== resolve(sdkRoot)) {
+                pluginBuild.onResolve({ filter: /^\.\.\/\.\.\/\.\.\/sdk\/dist\/.+\.js$/ }, (args) => {
+                    const file = args.path.slice("../../../sdk/dist/".length)
+                    return { path: join(targetSdkRoot, "dist", file) }
+                })
+            }
             pluginBuild.onResolve({ filter: /^(?:node:|events$|crypto$|timers$|util$|fs$|url$|os$|ws$)/ }, (args) => {
                 const target = shimMap.get(args.path)
                 if (target) return { path: target }
@@ -49,8 +55,8 @@ function createShimPlugin() {
     }
 }
 
-export async function bundlePlaygroundRuntime({ minify = true } = {}) {
-    const manifest = JSON.parse(await readFile(join(sdkRoot, "package.json"), "utf8"))
+export async function bundlePlaygroundRuntime({ minify = true, sdkRoot: targetSdkRoot = sdkRoot } = {}) {
+    const manifest = JSON.parse(await readFile(join(targetSdkRoot, "package.json"), "utf8"))
     const result = await build({
         entryPoints: [entryFile],
         bundle: true,
@@ -60,8 +66,8 @@ export async function bundlePlaygroundRuntime({ minify = true } = {}) {
         target: ["es2022"],
         minify,
         sourcemap: false,
-        nodePaths: [join(sdkRoot, "node_modules"), join(webRoot, "node_modules")],
-        plugins: [createShimPlugin()],
+        nodePaths: [join(targetSdkRoot, "node_modules"), join(sdkRoot, "node_modules"), join(webRoot, "node_modules")],
+        plugins: [createShimPlugin(targetSdkRoot)],
         define: {
             "import.meta.url": JSON.stringify("file:///fluxerly/dist/internal/logging.js"),
             __FLUXERLY_SDK_VERSION__: JSON.stringify(manifest.version ?? "0.0.0"),
@@ -76,7 +82,9 @@ export async function bundlePlaygroundRuntime({ minify = true } = {}) {
 
 export default function playgroundRuntime() {
     let cachedDevBundlePromise = null
+    let cachedDevNightlyBundlePromise = null
     let cachedDevTsAssetsPromise = null
+    const nightlyDir = () => process.env.PLAYGROUND_NIGHTLY_SDK_DIR || ""
     const getDevBundle = () => {
         cachedDevBundlePromise ??= bundlePlaygroundRuntime({ minify: false }).catch((error) => {
             cachedDevBundlePromise = null
@@ -84,8 +92,17 @@ export default function playgroundRuntime() {
         })
         return cachedDevBundlePromise
     }
+    const getDevNightlyBundle = () => {
+        const dir = nightlyDir()
+        if (!dir) return Promise.resolve(null)
+        cachedDevNightlyBundlePromise ??= bundlePlaygroundRuntime({ minify: false, sdkRoot: dir }).catch((error) => {
+            cachedDevNightlyBundlePromise = null
+            throw error
+        })
+        return cachedDevNightlyBundlePromise
+    }
     const getDevTsAssets = () => {
-        cachedDevTsAssetsPromise ??= buildPlaygroundTsAssets({ minify: false }).catch((error) => {
+        cachedDevTsAssetsPromise ??= buildPlaygroundTsAssets({ minify: false, nightlySdkRoot: nightlyDir() }).catch((error) => {
             cachedDevTsAssetsPromise = null
             throw error
         })
@@ -99,6 +116,7 @@ export default function playgroundRuntime() {
                     const normalized = changedFile.replaceAll("\\", "/")
                     if (normalized.includes("/playground-runtime/") || normalized.includes("/sdk/dist/")) {
                         cachedDevBundlePromise = null
+                        cachedDevNightlyBundlePromise = null
                     }
                     if (
                         normalized.includes("/playground-ts/") ||
@@ -114,6 +132,14 @@ export default function playgroundRuntime() {
                     try {
                         if (pathname === "/playground/runtime.js") {
                             const bundle = await getDevBundle()
+                            res.setHeader("content-type", "text/javascript; charset=utf-8")
+                            res.setHeader("cache-control", "no-store")
+                            res.end(bundle)
+                            return
+                        }
+                        if (pathname === "/playground/runtime-nightly.js") {
+                            const bundle = await getDevNightlyBundle()
+                            if (!bundle) return next()
                             res.setHeader("content-type", "text/javascript; charset=utf-8")
                             res.setHeader("cache-control", "no-store")
                             res.end(bundle)
@@ -149,6 +175,18 @@ export default function playgroundRuntime() {
                                 res.end(tsAssets.effectJson)
                                 return
                             }
+                            if (tsAssets.nightly && pathname === tsAssets.nightly.manifest.coreTypesUrl) {
+                                res.setHeader("content-type", "application/json; charset=utf-8")
+                                res.setHeader("cache-control", "no-store")
+                                res.end(tsAssets.nightly.coreJson)
+                                return
+                            }
+                            if (tsAssets.nightly && pathname === tsAssets.nightly.manifest.effectTypesUrl) {
+                                res.setHeader("content-type", "application/json; charset=utf-8")
+                                res.setHeader("cache-control", "no-store")
+                                res.end(tsAssets.nightly.effectJson)
+                                return
+                            }
                         }
                         return next()
                     } catch (error) {
@@ -160,18 +198,28 @@ export default function playgroundRuntime() {
                 // Versioned docs-only builds under /docs/<version>/ do not serve /playground/
                 if (process.env.PUBLIC_DOCS_BASE) return
                 const outDir = join(fileURLToPath(dir), "playground")
-                const [code, tsAssets] = await Promise.all([
+                const nightlySdkRoot = nightlyDir()
+                const [code, nightlyCode, tsAssets] = await Promise.all([
                     bundlePlaygroundRuntime({ minify: true }),
-                    buildPlaygroundTsAssets({ minify: true }),
+                    nightlySdkRoot ? bundlePlaygroundRuntime({ minify: true, sdkRoot: nightlySdkRoot }) : null,
+                    buildPlaygroundTsAssets({ minify: true, nightlySdkRoot }),
                 ])
                 await mkdir(outDir, { recursive: true })
-                await Promise.all([
+                const writes = [
                     writeFile(join(outDir, "runtime.js"), code, "utf8"),
                     writeFile(join(outDir, "ts-manifest.json"), tsAssets.manifestJson, "utf8"),
                     writeFile(join(outDir, tsAssets.workerFile), tsAssets.workerCode, "utf8"),
                     writeFile(join(outDir, tsAssets.coreFile), tsAssets.coreJson, "utf8"),
                     writeFile(join(outDir, tsAssets.effectFile), tsAssets.effectJson, "utf8"),
-                ])
+                ]
+                if (nightlyCode && tsAssets.nightly) {
+                    writes.push(
+                        writeFile(join(outDir, "runtime-nightly.js"), nightlyCode, "utf8"),
+                        writeFile(join(outDir, tsAssets.nightly.coreFile), tsAssets.nightly.coreJson, "utf8"),
+                        writeFile(join(outDir, tsAssets.nightly.effectFile), tsAssets.nightly.effectJson, "utf8"),
+                    )
+                }
+                await Promise.all(writes)
             },
         },
     }
