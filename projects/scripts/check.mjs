@@ -44,8 +44,8 @@ const steps = [
     { name: "sdk unit tests", group: "sdk", folder: "sdk", script: "test:unit", alone: true },
     { name: "sdk process tests", group: "sdk", folder: "sdk", script: "test:processes", after: ["sdk build"], alone: true },
 
-    { name: "web lint", group: "web", folder: "web", script: "lint" },
-    // The site reads the SDK's declarations and examples, and its tests and search check read the built site
+    // The site lint and build read the SDK's built declarations and examples, and its tests and search check read the built site
+    { name: "web lint", group: "web", folder: "web", script: "lint", after: ["sdk build"] },
     { name: "web build", group: "web", folder: "web", script: "build", after: ["sdk build"] },
     { name: "web types", group: "web", folder: "web", script: "check:types", after: ["web build"] },
     { name: "web tests", group: "web", folder: "web", script: "test", after: ["web build"] },

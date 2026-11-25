@@ -1,7 +1,7 @@
 {
     "repository": "fluxerapp/fluxer",
     "branch": "main",
-    "commit": "66cede641bd77335ec25c60bb5bc670c98ff537e",
+    "commit": "58062ed2e5fc57f3a9754748874d365b23690148",
     "files": {
         "openapi": {
             "path": "fluxer_api/src/api/openapi/openapi.json",

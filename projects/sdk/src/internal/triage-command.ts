@@ -1105,8 +1105,7 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
     const hasInput = options.problem !== undefined || logExcerpt !== undefined || trace !== undefined
     const launchPrompt = buildTriageLaunchPrompt(session.promptFilePath, hasInput)
     if (useAgnosticHandoff || !selected) {
-        const copyFn =
-            environment.copyToClipboard ?? ((text: string) => defaultCopyToClipboard(text, platform, env))
+        const copyFn = environment.copyToClipboard ?? ((text: string) => defaultCopyToClipboard(text, platform, env))
         let copied = false
         try {
             copied = await copyFn(launchPrompt)

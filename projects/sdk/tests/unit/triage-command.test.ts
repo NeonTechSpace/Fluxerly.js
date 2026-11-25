@@ -805,7 +805,9 @@ describe("fluxerly triage execution modes", () => {
         expect(resolveClipboardCandidates("win32", {}, "Read prompt")).toEqual([{ command: "clip", args: [] }])
         expect(resolveClipboardCandidates("win32", {}, "Read C:\\café\\prompt.md")).toEqual([])
         expect(resolveClipboardCandidates("linux", {}, "Read prompt")).toEqual([])
-        expect(resolveClipboardCandidates("linux", { WAYLAND_DISPLAY: "wayland-0", DISPLAY: ":0" }, "Read prompt")).toEqual([
+        expect(
+            resolveClipboardCandidates("linux", { WAYLAND_DISPLAY: "wayland-0", DISPLAY: ":0" }, "Read prompt"),
+        ).toEqual([
             { command: "wl-copy", args: [] },
             { command: "xclip", args: ["-selection", "clipboard"] },
             { command: "xsel", args: ["--clipboard", "--input"] },
