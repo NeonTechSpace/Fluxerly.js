@@ -14,17 +14,18 @@
   <a href="https://github.com/NeonTechSpace/Fluxerly.js/issues"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/issues/NeonTechSpace/Fluxerly.js.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Issues&amp;labelColor=111827&amp;color=9333ea&amp;logo=github&amp;mode=dark"><img src="https://shieldcn.dev/github/issues/NeonTechSpace/Fluxerly.js.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Issues&amp;labelColor=111827&amp;color=9333ea&amp;logo=github&amp;mode=light" alt="Open GitHub issues"></picture></a>
   <a href="https://github.com/NeonTechSpace/Fluxerly.js/pulls"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/prs/NeonTechSpace/Fluxerly.js.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=PRs&amp;labelColor=111827&amp;color=6366f1&amp;logo=github&amp;mode=dark"><img src="https://shieldcn.dev/github/prs/NeonTechSpace/Fluxerly.js.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=PRs&amp;labelColor=111827&amp;color=6366f1&amp;logo=github&amp;mode=light" alt="Open GitHub pull requests"></picture></a>
   <a href="https://github.com/NeonTechSpace/Fluxerly.js/forks"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/forks/NeonTechSpace/Fluxerly.js.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Forks&amp;labelColor=111827&amp;color=2563eb&amp;logo=github&amp;mode=dark"><img src="https://shieldcn.dev/github/forks/NeonTechSpace/Fluxerly.js.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Forks&amp;labelColor=111827&amp;color=2563eb&amp;logo=github&amp;mode=light" alt="GitHub forks"></picture></a>
-<a href="https://github.com/NeonTechSpace/Fluxerly.js/stargazers"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/stars/NeonTechSpace/Fluxerly.js.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Stars&amp;labelColor=111827&amp;color=9a6700&amp;labelTextColor=ffffff&amp;valueColor=ffffff&amp;logo=github&amp;mode=dark"><img src="https://shieldcn.dev/github/stars/NeonTechSpace/Fluxerly.js.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Stars&amp;labelColor=111827&amp;color=9a6700&amp;labelTextColor=ffffff&amp;valueColor=ffffff&amp;logo=github&amp;mode=light" alt="GitHub stars"></picture></a>
+  <a href="https://github.com/NeonTechSpace/Fluxerly.js/stargazers"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/stars/NeonTechSpace/Fluxerly.js.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Stars&amp;labelColor=111827&amp;color=9a6700&amp;labelTextColor=ffffff&amp;valueColor=ffffff&amp;logo=github&amp;mode=dark"><img src="https://shieldcn.dev/github/stars/NeonTechSpace/Fluxerly.js.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Stars&amp;labelColor=111827&amp;color=9a6700&amp;labelTextColor=ffffff&amp;valueColor=ffffff&amp;logo=github&amp;mode=light" alt="GitHub stars"></picture></a>
 </p>
 
 <p align="center">
-<a href="https://www.npmjs.com/package/@neontechspace/fluxerly"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/npm/v/@neontechspace/fluxerly/latest.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=npm&amp;labelColor=111827&amp;color=5c1028&amp;labelTextColor=ffffff&amp;valueColor=ffffff&amp;logo=npm&amp;mode=dark"><img src="https://shieldcn.dev/npm/v/@neontechspace/fluxerly/latest.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=npm&amp;labelColor=111827&amp;color=5c1028&amp;labelTextColor=ffffff&amp;valueColor=ffffff&amp;logo=npm&amp;mode=light" alt="npm version"></picture></a>
+  <a href="https://www.npmjs.com/package/@neontechspace/fluxerly"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/npm/v/@neontechspace/fluxerly/latest.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=npm&amp;labelColor=111827&amp;color=5c1028&amp;labelTextColor=ffffff&amp;valueColor=ffffff&amp;logo=npm&amp;mode=dark"><img src="https://shieldcn.dev/npm/v/@neontechspace/fluxerly/latest.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=npm&amp;labelColor=111827&amp;color=5c1028&amp;labelTextColor=ffffff&amp;valueColor=ffffff&amp;logo=npm&amp;mode=light" alt="npm version"></picture></a>
   <a href="https://ossinsight.io/analyze/NeonTechSpace/Fluxerly.js#overview"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/OSS%20Insight-Analytics-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=OSS%20Insight&amp;labelColor=111827&amp;color=0891b2&amp;logo=github&amp;mode=dark"><img src="https://shieldcn.dev/badge/OSS%20Insight-Analytics-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=OSS%20Insight&amp;labelColor=111827&amp;color=0891b2&amp;logo=github&amp;mode=light" alt="OSS Insight: Repository analytics"></picture></a>
   <picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Community-Invite%20coming%20soon-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Community&amp;labelColor=111827&amp;color=0891b2&amp;logo=fluxer&amp;mode=dark"><img src="https://shieldcn.dev/badge/Community-Invite%20coming%20soon-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Community&amp;labelColor=111827&amp;color=0891b2&amp;logo=fluxer&amp;mode=light" alt="Community: Public invite coming soon"></picture>
 </p>
 
 <p align="center">
   <a href="https://fluxerly.neontechspace.com/">Home</a> ·
+  <a href="https://fluxerly.neontechspace.com/playground/">Playground</a> ·
   <a href="https://fluxerly.neontechspace.com/docs/">Docs</a> ·
   <a href="https://fluxerly.neontechspace.com/docs/quick-start/">Quick start</a> ·
   <a href="https://fluxerly.neontechspace.com/docs/api/">API reference</a> ·
@@ -53,62 +54,84 @@ await runBot({
 ```
 
 <p align="center">
-  <img src="/docs/assets/demo.webp" width="720" alt="A terminal runs fluxerly init and npm start, then in a chat !ping gets the reply Pong!">
+  <img src="/docs/assets/demo.webp" width="720" alt="Terminal running npx @neontechspace/fluxerly init with the interactive starter menu and npm start alongside a #general Fluxer channel where !ping gets the reply Pong!">
 </p>
 
-The same SDK runs large bots. [NeonFlux](https://github.com/NeonTechSpace/NeonFlux) is a real Fluxer bot using it
+Try real `@neontechspace/fluxerly` JavaScript, TypeScript and Effect bots live in the browser [Playground](https://fluxerly.neontechspace.com/playground/) with zero backend setup. The same SDK powers production bots such as [NeonFlux](https://github.com/NeonTechSpace/NeonFlux)
+
+## Built-in CLI: Scaffold, verify and triage
+
+Every `@neontechspace/fluxerly` install ships the `fluxerly` CLI with zero extra global tools. One command scaffolds a tested starter, audits the project offline, launches agent-powered root-cause triage, syncs coding-agent rules or builds an installation link
+
+| Command | What it does | Key flags |
+| --- | --- | --- |
+| `fluxerly init` | Creates a JavaScript, TypeScript or Effect starter bot with a working `createTestBot` test and `AGENTS.md`, then installs dependencies | `--template js\|ts\|effect`, `--dir <folder>`, `--pm npm\|pnpm\|bun`, `--no-install` |
+| `fluxerly doctor` | Verifies runtime, ESM, TypeScript, Effect, installed dependencies, source imports and secret hygiene completely offline | `--json` |
+| `fluxerly triage` | Bundles redacted project facts, doctor checks, optional logs or debug traces and the triage playbook for a coding agent | `[problem]`, `--agent claude\|codex\|antigravity`, `--model <id>`, `--dir <folder>`, `--log <file>`, `--run <command>`, `--print` |
+| `fluxerly agents` | Writes, refreshes or checks Fluxerly rules for coding agents across `AGENTS.md`, skills and IDE rule files | `--target agents\|skill\|cursor\|claude\|gemini\|all`, `--check`, `--print` |
+| `fluxerly invite` | Generates a Fluxer bot installation URL offline from an application ID and permission names or bitfield | `<applicationId>`, `--permissions <value>` |
+
+### Diagnose project setup offline with `fluxerly doctor`
+
+Run `npx --no fluxerly doctor` (or `pnpm exec fluxerly doctor`, `bunx --no-install fluxerly doctor`) to catch configuration mistakes before a bot ever connects. The check runs completely offline without contacting Fluxer or printing token values, inspecting Node.js `>=26.13.0`, ESM `"type": "module"`, `tsconfig.json`, TypeScript 7, `@types/node`, Effect 4 peer alignment, installed `node_modules` drift, forbidden CommonJS `require()` or deep `/dist/` or `/src/` imports, `AGENTS.md` freshness, `.gitignore` rules and `.env` token prefix mistakes (`Bot ` or `Bearer `)
+
+Every warning or failure prints an exact fix, and `--json` emits structured results for CI or scripts
+
+<p align="center">
+  <img src="/docs/assets/doctor.webp" width="720" alt="Terminal running npx --no fluxerly doctor, catching an outdated AGENTS.md warning and a Bot token prefix failure with exact fixes, then re-running after the fixes to show all 7 checks passing">
+</p>
+
+### Root-cause bot and SDK issues with `fluxerly triage`
+
+Run `npx --no fluxerly triage` when startup fails, the gateway drops, an API call rejects unexpectedly or the SDK itself appears wrong. The command gathers redacted static environment facts (CLI version, installed SDK version, pinned Fluxer server commit, shipped `src/` path and `fluxerly doctor` results), optionally attaches a redacted tail from `--log <file>` or captures a live `FLUXERLY_DEBUG=rest,gateway` trace with `--run <command>`, and starts Claude Code, Codex or Antigravity with Fluxerly's bundled triage playbook. Pass `--print` to output the redacted playbook and context for any other coding agent
+
+Grounded in the TypeScript source shipped inside `node_modules/@neontechspace/fluxerly/src`, the session separates three fault layers before proposing action: Bot code or setup, Fluxer account or permissions, or an SDK defect or Fluxer parity gap confirmed with a minimal `createTestBot` reproduction. Secrets in `.env` are never read, tokens and home paths are masked automatically, and no file edit or GitHub issue is performed without explicit confirmation
+
+<p align="center">
+  <img src="/docs/assets/triage.webp" width="720" alt="Terminal running npx --no fluxerly triage with --run trace capture and the agent picker alongside a triage session panel showing redacted context, shipped source tracing, createTestBot verification and a proven permissions verdict">
+</p>
 
 ## What Fluxerly includes
 
 Fluxerly is built for developers at every skill level, from a first bot in one file to large production bots that need full control
 
-- **One-file start and scaffolding:** The `fluxerly init` CLI creates a runnable JavaScript, TypeScript or Effect starter with a working test, and `runBot` connects, drains on Ctrl+C and explains failed startups with a fix
-- **Structured, actionable errors:** Network calls return a Result instead of throwing silently, every error carries a stable code, an actionable hint, typo suggestions on unknown options and `describeError` output with `errors.apiCode`, `errors.outcome` and `errors.retryAfterMs`, while logs mask tokens and recognized credentials automatically
-- **Built-in commands, builders and collectors:** Prefix commands with typed arguments, guards, cooldowns, middleware, command groups and generated help, alongside `EmbedBuilder`, `MessageBuilder` and message or reaction collectors
-- **Complete Fluxer coverage:** Messages, embeds, attachments, voice notes, reactions, threads and forum posts, communities, roles and permissions, emoji and stickers, webhooks and OAuth2, with paginated history and opt-in bounded caches
-- **Typed raw escape hatches:** The `client.rest.call` method reaches every bot route with Fluxer's own field names checked at compile time, `client.rest.request` reaches routes newer than the SDK, and raw gateway events carry their documented payload types
-- **Zero-network testing:** The `/testing` and `/effect/testing` entry points ship `createTestBot` with an in-memory Fluxer gateway, HTTP server and virtual test clock so timed work runs without waiting
-- **Two APIs, one engine:** Start with async/await and Results, or choose the native Effect 4 API with typed error channels, scopes and layers, backed by the same implementation
-- **Production resilience:** Automatic sharding, session resume across restarts, a process supervisor, deadline-aware rate limiting that never blindly replays uncertain writes, and metrics and traces through `observe`
-- **Built-in CLI, diagnostics and agent workflow:** Shipped TypeScript `src/` and source maps, `fluxerly doctor` for offline setup and `node_modules` drift checks, `fluxerly triage` for agent-powered root-cause debugging against shipped source with `createTestBot` reproductions, `fluxerly agents` for `AGENTS.md`, `SKILL.md`, Cursor, Claude and Gemini rules, `fluxerly invite` for offline install URLs, plus [SKILL.md](https://fluxerly.neontechspace.com/SKILL.md) and [llms.txt](https://fluxerly.neontechspace.com/llms.txt)
-- **Tracked against Fluxer's server:** Automated drift checks across Fluxer's API documents and server source trees, verified by offline contract tests, live end-to-end Fluxer checks and multi-model security reviews
+| Capability | What ships out of the box |
+| --- | --- |
+| **One-file start and scaffolding** | Interactive `fluxerly init` starters for JavaScript, TypeScript and Effect with a working test, plus `runBot` lifecycle handling that connects, drains on Ctrl+C and explains failed startups with a fix |
+| **Structured, actionable errors** | Network calls return a Result instead of throwing silently, every error carries a stable code, an actionable hint, typo suggestions on unknown options and `describeError` output with `errors.apiCode`, `errors.outcome` and `errors.retryAfterMs`, while logs mask tokens and credentials automatically |
+| **Commands, builders and collectors** | Prefix commands with typed arguments, guards, cooldowns, middleware, command groups and generated help, paired with `EmbedBuilder`, `MessageBuilder` and message or reaction collectors |
+| **Complete Fluxer coverage** | Messages, embeds, attachments, voice notes, reactions, threads and forum posts, communities, roles and permissions, emoji and stickers, webhooks and OAuth2, with paginated history and opt-in bounded caches |
+| **Typed raw escape hatches** | Compile-time checked bot routes via `client.rest.call` using Fluxer's own field names, `client.rest.request` for routes newer than the SDK, and raw gateway events carrying documented payload types |
+| **Zero-network testing and playground** | In-memory Fluxer gateway, HTTP server and virtual test clock through `createTestBot` in `/testing` and `/effect/testing`, plus the browser [Playground](https://fluxerly.neontechspace.com/playground/) with fault injection and wire inspection |
+| **Two APIs, one engine** | Async/await with Results in `@neontechspace/fluxerly` and native Effect 4 with typed error channels, scopes and layers in `@neontechspace/fluxerly/effect`, backed by one implementation |
+| **Production resilience** | Automatic sharding, session resume across restarts, a process supervisor, deadline-aware rate limiting that never blindly replays uncertain writes, and metrics and traces through `observe` |
+| **Shipped source and agent workflow** | Full TypeScript `src/` and source maps inside the package, `fluxerly doctor`, `fluxerly triage`, `fluxerly agents`, `fluxerly invite`, plus [SKILL.md](https://fluxerly.neontechspace.com/SKILL.md) and [llms.txt](https://fluxerly.neontechspace.com/llms.txt) |
+| **Tracked against Fluxer's server** | Automated drift checks across Fluxer's API documents and server source trees, verified by offline contract tests, live end-to-end Fluxer checks and multi-model security reviews |
 
 The result is less infrastructure to build, with testing, diagnostics and production structure already in place
 
 ## Install
 
-Fluxer moves fast, and Fluxerly keeps pace. Choose the channel that fits your bot:
+Fluxer moves fast, and Fluxerly keeps pace. Two channels fit different bots:
 
 - **Stable:** Releases that passed every check, for bots that value calm
 - **Nightly:** The newest changes as they land, for bots that want them first
 
 Fluxerly is tested against Node.js 26.13 or newer. JavaScript needs no compiler, and TypeScript typechecking or compilation requires TypeScript 7 and `@types/node` as a development dependency
 
-**npm**
+| Package manager | Stable | Nightly (exact pin) |
+| --- | --- | --- |
+| **npm** | `npm install @neontechspace/fluxerly` | `npm install --save-exact @neontechspace/fluxerly@nightly` |
+| **pnpm** | `pnpm add @neontechspace/fluxerly` | `pnpm add --save-exact @neontechspace/fluxerly@nightly` |
+| **Bun** | `bun add @neontechspace/fluxerly` | `bun add --exact @neontechspace/fluxerly@nightly` |
 
-```sh
-npm install @neontechspace/fluxerly
-```
-
-**pnpm**
-
-```sh
-pnpm add @neontechspace/fluxerly
-```
-
-**Bun**
-
-```sh
-bun add @neontechspace/fluxerly
-```
-
-> A committed lockfile records the exact installed version and keeps installs reproducible. Nightly releases can include breaking changes. Install one with `npm install --save-exact @neontechspace/fluxerly@nightly`, or `bun add --exact @neontechspace/fluxerly@nightly` with Bun, so a fresh install without a lockfile cannot pick up a newer nightly that breaks the API
+> A committed lockfile records the exact installed version and keeps installs reproducible. Nightly releases can include breaking changes, so pinning the exact version prevents a fresh install without a lockfile from pulling a newer nightly that breaks the API
 
 ## Getting started
 
-A bot needs a Fluxer application, its bot token and an invite to a community
+A bot needs a Fluxer application, its bot token and an invite to a community. [Create a bot](https://fluxerly.neontechspace.com/docs/create-a-bot/) walks through setup and permissions
 
-Generate a project with a test in the bot's folder with `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init`, choose JavaScript, TypeScript or Effect, and follow the steps it prints. Adding `--template js`, `--template ts` or `--template effect` skips the question. An existing `.env` is kept, and missing `node_modules` and `.env` lines are added to an existing `.gitignore`. The [quick start](https://fluxerly.neontechspace.com/docs/quick-start/) also sets up the same project by hand
+Generate a starter project with a working test using `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init`, then pick JavaScript, TypeScript or Effect in the interactive menu. Pass `--template js`, `--template ts` or `--template effect` to skip the prompt, `--dir <folder>` to target a new directory, `--pm npm|pnpm|bun` to override the package manager or `--no-install` for offline setups. Existing `.env` files are preserved, and missing `node_modules` and `.env` entries are appended to an existing `.gitignore`. The [quick start](https://fluxerly.neontechspace.com/docs/quick-start/) also sets up the same project by hand
 
 The generated `bot.js` replies **Pong!** to **!ping**:
 
@@ -131,19 +154,16 @@ export const bot = defineBot({
 if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })
 ```
 
-Set `FLUXER_BOT_TOKEN` in `.env`, check the bot with `npm test` and start it with `npm start`, then send **!ping** in a channel the bot can read. While changing the bot, `npm run dev` restarts it after each saved change
+Set `FLUXER_BOT_TOKEN` in `.env`, verify the project with `npm test` and `npx --no fluxerly doctor`, and start the bot with `npm start` (or `npm run dev` to restart on each saved change). Send **!ping** in a channel the bot can read to see **Pong!**
 
 ## Choosing an API
 
-### JavaScript & TypeScript
+Both entry points share one engine with typed events, prefix commands, embeds, attachments, reactions, collectors and optional bounded caches
 
-Import `@neontechspace/fluxerly` and use `async` / `await`. Check Results for expected failures, and control shutdown with explicit methods and cancellation signals. The default API works with new bots and existing Promise-based applications. JavaScript users do not need TypeScript or Effect setup
-
-### Effect
-
-Import `@neontechspace/fluxerly/effect` and compose work with `Effect.gen` and `yield*`. Expected failures stay in the typed error channel. Scopes and interruption control cleanup. Choose this API for an Effect application, or to learn structured concurrency with a real bot
-
-Both entry points provide typed events, prefix commands, embeds, attachments, reactions and collectors. Optional bounded caches keep local lookup separate from remote reads
+| API | Import | Testing entry point | Style |
+| --- | --- | --- | --- |
+| **JavaScript & TypeScript** | `@neontechspace/fluxerly` | `@neontechspace/fluxerly/testing` | Async/await with Results, explicit shutdown and `AbortSignal` cancellation. Zero TypeScript or Effect setup required for JavaScript |
+| **Effect 4** | `@neontechspace/fluxerly/effect` | `@neontechspace/fluxerly/effect/testing` | Native `Effect.gen` programs with typed error channels, scopes and structured interruption |
 
 ### Why learn Effect?
 

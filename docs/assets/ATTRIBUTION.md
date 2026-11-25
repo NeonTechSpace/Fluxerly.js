@@ -1,6 +1,6 @@
 # Artwork sources
 
-The [README banner](/docs/assets/banner.jpg) and [demo](/docs/assets/demo.webp) use the accepted Fluxerly artwork
+The [README banner](/docs/assets/banner.jpg) and CLI demos ([demo](/docs/assets/demo.webp), [doctor](/docs/assets/doctor.webp) and [triage](/docs/assets/triage.webp)) use the accepted Fluxerly artwork
 
 Original mascot concept: Neonsy's NeonConductor project and NTS organization mascot
 
