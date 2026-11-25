@@ -482,6 +482,7 @@ export function inspectProject(
     project: string,
     packageRoot: string,
     nodeVersion = process.versions.node,
+    options?: { readonly readEnvFile?: boolean },
 ): DoctorReport {
     const checks: DoctorCheck[] = [checkNode(nodeVersion)]
     const sdkManifest = readJson(join(packageRoot, "package.json"))
@@ -539,29 +540,45 @@ export function inspectProject(
     checks.push(checkAgents(project, packageRoot))
     checks.push(checkGitignore(project))
 
-    const tokenState = hasEnvToken(project)
-    if (tokenState === "set")
-        checks.push({ id: "env-token", status: "pass", message: "FLUXER_BOT_TOKEN is set in .env" })
-    else if (tokenState === "scheme")
-        checks.push({
-            id: "env-token",
-            status: "fail",
-            message: 'FLUXER_BOT_TOKEN in .env starts with a "Bot " or "Bearer " prefix',
-            fix: "Store only the raw bot token in .env without a Bot or Bearer prefix",
-        })
-    else
-        checks.push({
-            id: "env-token",
-            status: "warn",
-            message:
-                tokenState === "missing"
-                    ? ".env was not found (not needed for createTestBot tests, required to connect)"
-                    : "FLUXER_BOT_TOKEN is empty in .env (not needed for createTestBot tests, required to connect)",
-            fix:
-                tokenState === "missing"
-                    ? "Create .env with FLUXER_BOT_TOKEN=... and run with node --env-file=.env"
-                    : "Set FLUXER_BOT_TOKEN in .env before running the bot against Fluxer",
-        })
+    if (options?.readEnvFile === false) {
+        if (existsSync(join(project, ".env")))
+            checks.push({
+                id: "env-token",
+                status: "pass",
+                message: ".env file is present (contents not read by triage)",
+            })
+        else
+            checks.push({
+                id: "env-token",
+                status: "warn",
+                message: ".env was not found (not needed for createTestBot tests, required to connect)",
+                fix: "Create .env with FLUXER_BOT_TOKEN=... and run with node --env-file=.env",
+            })
+    } else {
+        const tokenState = hasEnvToken(project)
+        if (tokenState === "set")
+            checks.push({ id: "env-token", status: "pass", message: "FLUXER_BOT_TOKEN is set in .env" })
+        else if (tokenState === "scheme")
+            checks.push({
+                id: "env-token",
+                status: "fail",
+                message: 'FLUXER_BOT_TOKEN in .env starts with a "Bot " or "Bearer " prefix',
+                fix: "Store only the raw bot token in .env without a Bot or Bearer prefix",
+            })
+        else
+            checks.push({
+                id: "env-token",
+                status: "warn",
+                message:
+                    tokenState === "missing"
+                        ? ".env was not found (not needed for createTestBot tests, required to connect)"
+                        : "FLUXER_BOT_TOKEN is empty in .env (not needed for createTestBot tests, required to connect)",
+                fix:
+                    tokenState === "missing"
+                        ? "Create .env with FLUXER_BOT_TOKEN=... and run with node --env-file=.env"
+                        : "Set FLUXER_BOT_TOKEN in .env before running the bot against Fluxer",
+            })
+    }
 
     return { ok: checks.every((check) => check.status !== "fail"), checks }
 }
@@ -588,6 +605,7 @@ export function collectProjectFacts(
     project: string,
     packageRoot: string,
     nodeVersion = process.versions.node,
+    options?: { readonly readEnvFile?: boolean },
 ): ProjectFacts {
     const cliManifest = readJson(join(packageRoot, "package.json"))
     const cliVersion = typeof cliManifest?.version === "string" ? cliManifest.version : undefined
@@ -613,7 +631,7 @@ export function collectProjectFacts(
         installedTypesNodeVersion: installedPackageVersion(project, "@types/node"),
         packageManager: detectPackageManager(project),
         hasTsConfig: existsSync(join(project, "tsconfig.json")),
-        doctor: inspectProject(project, packageRoot, nodeVersion),
+        doctor: inspectProject(project, packageRoot, nodeVersion, options),
     }
 }
 

@@ -18,6 +18,7 @@ import {
 import { arch, homedir, platform as osPlatform, release as osRelease, tmpdir } from "node:os"
 import { basename, delimiter, isAbsolute, join, resolve } from "node:path"
 import { createInterface } from "node:readline/promises"
+import { StringDecoder } from "node:string_decoder"
 import { createCliTheme, type CliStreamLike } from "./cli-theme.js"
 import { collectProjectFacts, type DoctorStatus, type ProjectFacts } from "./doctor-command.js"
 import { maskText, maskedMessage } from "./masking.js"
@@ -179,9 +180,10 @@ export function parseTriageArguments(
         } else if (arg === "--run") {
             if (run !== undefined) return { ok: false, message: "The --run option was passed more than once" }
             const value = args[++index]
-            if (!value || !value.trim())
+            const trimmed = value?.trim() ?? ""
+            if (!trimmed || trimmed.startsWith("-"))
                 return { ok: false, message: "The --run option requires a command string to execute" }
-            run = value.trim()
+            run = trimmed
         } else if (arg.startsWith("-")) {
             return { ok: false, message: `Unknown argument "${arg}" for triage` }
         } else {
@@ -231,17 +233,64 @@ function isSensitiveLogFile(filePath: string): boolean {
     return sensitiveLogFilePattern.test(name)
 }
 
-function redactInlineText(text: string, home: string): string {
-    const masked = maskText(text)
+function envSecrets(env: Readonly<Record<string, string | undefined>>): readonly string[] {
+    const keys = ["FLUXER_BOT_TOKEN", "FLUXER_TOKEN", "BOT_TOKEN"]
+    const values: string[] = []
+    for (const key of keys) {
+        const value = env[key]?.trim()
+        if (value && value.length >= 6) values.push(value)
+    }
+    return values
+}
+
+function redactInlineText(text: string, home: string, secrets: readonly string[] = []): string {
+    const masked = maskText(text, secrets)
     if (!home) return masked
     const normalizedHome = home.endsWith("/") || home.endsWith("\\") ? home.slice(0, -1) : home
     if (!normalizedHome) return masked
     return masked.replaceAll(normalizedHome, "~")
 }
 
+const maxTraceRawLineChars = 262_144
+const maxTraceRawBufferChars = 1_048_576
+
+function sliceRedactedTail(masked: string, maxChars: number): string {
+    if (masked.length <= maxChars) return masked
+    let start = masked.length - maxChars
+    for (const marker of ["[redacted]", "[REDACTED]"]) {
+        const markerStart = masked.lastIndexOf(marker, start)
+        if (markerStart !== -1 && markerStart < start && markerStart + marker.length > start) {
+            start = markerStart + marker.length
+        }
+    }
+    return masked.slice(start)
+}
+
+function redactAndTail(
+    raw: string,
+    maxChars: number,
+    home: string,
+    secrets: readonly string[] = [],
+): { readonly text: string; readonly truncated: boolean } {
+    const masked = redactInlineText(raw, home, secrets)
+    return {
+        text: sliceRedactedTail(masked, maxChars),
+        truncated: raw.length > maxChars || masked.length > maxChars,
+    }
+}
+
+function markdownCodeFence(body: string): string {
+    let longest = 2
+    for (const match of body.matchAll(/`+/g)) {
+        if (match[0].length > longest) longest = match[0].length
+    }
+    return "`".repeat(longest + 1)
+}
+
 function readRedactedLogTail(
     filePath: string,
     home: string,
+    secrets: readonly string[] = [],
 ):
     | { readonly ok: true; readonly excerpt: string; readonly truncated: boolean }
     | { readonly ok: false; readonly message: string } {
@@ -259,9 +308,58 @@ function readRedactedLogTail(
         const detail = message ? ` (${message})` : ""
         return { ok: false, message: `Could not read log file "${filePath}"${detail}` }
     }
-    const truncated = raw.length > maxLogExcerptChars
-    const slice = truncated ? raw.slice(raw.length - maxLogExcerptChars) : raw
-    return { ok: true, excerpt: redactInlineText(slice, home).trimEnd(), truncated }
+    const tailed = redactAndTail(raw, maxLogExcerptChars, home, secrets)
+    return { ok: true, excerpt: tailed.text.trimEnd(), truncated: tailed.truncated }
+}
+
+function terminateTraceProcessTree(child: ReturnType<typeof spawn>, signal: "SIGTERM" | "SIGKILL"): void {
+    const pid = child.pid
+    if (process.platform === "win32") {
+        if (pid !== undefined) {
+            try {
+                const killer = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
+                    stdio: "ignore",
+                    windowsHide: true,
+                })
+                killer.once("error", () => {
+                    // allow-silent: Ignore missing Windows kill helper when falling back
+                })
+                killer.unref()
+                return
+            } catch {
+                // allow-silent: Fall back to direct child.kill when process tree termination is unavailable
+            }
+        }
+        try {
+            child.kill(signal)
+        } catch {
+            // allow-silent: Process already exited
+        }
+        return
+    }
+    if (pid !== undefined) {
+        try {
+            process.kill(-pid, signal)
+            return
+        } catch {
+            // allow-silent: Process group may already have exited; fall back to direct child.kill
+        }
+    }
+    try {
+        child.kill(signal)
+    } catch {
+        // allow-silent: Process already exited
+    }
+}
+
+function processGroupAlive(pid: number): boolean {
+    try {
+        process.kill(-pid, 0)
+        return true
+    } catch {
+        // allow-silent: Missing process group means no descendant remains
+        return false
+    }
 }
 
 function defaultRunTraceCommand(
@@ -270,55 +368,146 @@ function defaultRunTraceCommand(
         readonly cwd: string
         readonly env: Readonly<Record<string, string | undefined>>
         readonly timeoutMs: number
+        readonly homedir?: string | undefined
+        readonly secrets?: readonly string[] | undefined
     },
 ): Promise<TriageTraceResult> {
     return new Promise((resolveTrace) => {
         const debugValue = options.env.FLUXERLY_DEBUG?.trim() || "rest,gateway"
+        const home = options.homedir ?? homedir()
+        const secrets = options.secrets ?? envSecrets(options.env)
         const child = spawn(command, {
             cwd: options.cwd,
             env: { ...options.env, FLUXERLY_DEBUG: debugValue },
             shell: true,
+            detached: process.platform !== "win32",
             stdio: ["ignore", "pipe", "pipe"],
         })
-        let buffer = ""
+        let completedMasked = ""
+        let completedRaw = ""
         let truncated = false
         let timedOut = false
         let settled = false
-        const append = (chunk: Buffer) => {
-            buffer += chunk.toString("utf8")
-            if (buffer.length > maxTraceCaptureChars) {
-                buffer = buffer.slice(buffer.length - maxTraceCaptureChars)
-                truncated = true
+        let killTimer: ReturnType<typeof setTimeout> | undefined
+        let exitDrainTimer: ReturnType<typeof setTimeout> | undefined
+
+        interface StreamBufferState {
+            pendingLine: string
+            droppingLongLine: boolean
+            readonly decoder: StringDecoder
+        }
+        const createStreamState = (): StreamBufferState => ({
+            pendingLine: "",
+            droppingLongLine: false,
+            decoder: new StringDecoder("utf8"),
+        })
+        const stdoutState = createStreamState()
+        const stderrState = createStreamState()
+
+        const flushCompletedRaw = () => {
+            if (completedRaw.length === 0) return
+            const maskedBatch = redactInlineText(completedRaw, home, secrets)
+            completedRaw = ""
+            const combined = completedMasked + maskedBatch
+            if (combined.length > maxTraceCaptureChars) truncated = true
+            completedMasked = sliceRedactedTail(combined, maxTraceCaptureChars)
+        }
+
+        const pushCompletedLine = (line: string) => {
+            completedRaw += `${line}\n`
+            if (completedRaw.length > maxTraceRawBufferChars) flushCompletedRaw()
+        }
+
+        const appendText = (state: StreamBufferState, text: string) => {
+            let offset = 0
+            while (offset < text.length) {
+                const nlIndex = text.indexOf("\n", offset)
+                if (state.droppingLongLine) {
+                    if (nlIndex === -1) return
+                    state.droppingLongLine = false
+                    offset = nlIndex + 1
+                    continue
+                }
+                if (nlIndex !== -1) {
+                    const piece = text.slice(offset, nlIndex)
+                    if (state.pendingLine.length + piece.length > maxTraceRawLineChars) {
+                        state.pendingLine = ""
+                        truncated = true
+                        pushCompletedLine("[omitted oversized line]")
+                    } else {
+                        pushCompletedLine(state.pendingLine + piece)
+                        state.pendingLine = ""
+                    }
+                    offset = nlIndex + 1
+                } else {
+                    const piece = text.slice(offset)
+                    if (state.pendingLine.length + piece.length > maxTraceRawLineChars) {
+                        state.pendingLine = ""
+                        state.droppingLongLine = true
+                        truncated = true
+                        pushCompletedLine("[omitted oversized line]")
+                    } else {
+                        state.pendingLine += piece
+                    }
+                    return
+                }
             }
         }
-        child.stdout?.on("data", append)
-        child.stderr?.on("data", append)
-        const timer = setTimeout(() => {
-            timedOut = true
-            child.kill("SIGTERM")
-            const killTimer = setTimeout(() => child.kill("SIGKILL"), 2_000)
-            killTimer.unref()
-        }, options.timeoutMs)
-        timer.unref()
-        const finish = (
-            exitCode: number | null,
-            signal: NodeJS.Signals | null,
-            errorMessage?: string,
-        ) => {
+
+        child.stdout?.on("data", (chunk: Buffer) => appendText(stdoutState, stdoutState.decoder.write(chunk)))
+        child.stderr?.on("data", (chunk: Buffer) => appendText(stderrState, stderrState.decoder.write(chunk)))
+        const finish = (exitCode: number | null, signal: NodeJS.Signals | null, errorMessage?: string) => {
             if (settled) return
             settled = true
             clearTimeout(timer)
+            if (killTimer !== undefined) clearTimeout(killTimer)
+            if (exitDrainTimer !== undefined) clearTimeout(exitDrainTimer)
+            if (process.platform !== "win32" && child.pid !== undefined && processGroupAlive(child.pid)) {
+                terminateTraceProcessTree(child, "SIGKILL")
+            }
+            const stdoutRest = stdoutState.decoder.end()
+            if (stdoutRest.length > 0) appendText(stdoutState, stdoutRest)
+            const stderrRest = stderrState.decoder.end()
+            if (stderrRest.length > 0) appendText(stderrState, stderrRest)
+            if (stdoutState.pendingLine.length > 0) pushCompletedLine(stdoutState.pendingLine)
+            if (stderrState.pendingLine.length > 0) pushCompletedLine(stderrState.pendingLine)
+            const maskedTail = completedRaw.length > 0 ? redactInlineText(completedRaw, home, secrets) : ""
+            const combined = completedMasked + maskedTail
+            const output = sliceRedactedTail(combined, maxTraceCaptureChars)
             resolveTrace({
                 command,
                 exitCode,
                 signal,
                 timedOut,
-                output: buffer,
-                truncated,
+                output,
+                truncated: truncated || combined.length > maxTraceCaptureChars,
                 errorMessage,
             })
         }
+        const timer = setTimeout(() => {
+            timedOut = true
+            terminateTraceProcessTree(child, "SIGTERM")
+            killTimer = setTimeout(() => {
+                terminateTraceProcessTree(child, "SIGKILL")
+                child.stdout?.destroy()
+                child.stderr?.destroy()
+                finish(null, "SIGKILL")
+            }, 500)
+            killTimer.unref()
+        }, options.timeoutMs)
+        timer.unref()
         child.once("error", (error) => finish(null, null, maskedMessage(error) || "Failed to execute command"))
+        child.once("exit", (code, signal) => {
+            if (settled || timedOut) return
+            clearTimeout(timer)
+            exitDrainTimer = setTimeout(() => {
+                terminateTraceProcessTree(child, "SIGKILL")
+                child.stdout?.destroy()
+                child.stderr?.destroy()
+                finish(code, signal)
+            }, 50)
+            exitDrainTimer.unref()
+        })
         child.once("close", (code, signal) => finish(code, signal))
     })
 }
@@ -333,11 +522,11 @@ function formatTriageContext(
         readonly osRelease: string
         readonly osArch: string
         readonly homedir: string
+        readonly secrets?: readonly string[] | undefined
         readonly generatedAt: string
         readonly problem?: string | undefined
         readonly logExcerpt?:
-            | { readonly path: string; readonly excerpt: string; readonly truncated: boolean }
-            | undefined
+            { readonly path: string; readonly excerpt: string; readonly truncated: boolean } | undefined
         readonly trace?:
             | {
                   readonly result: TriageTraceResult
@@ -353,10 +542,13 @@ function formatTriageContext(
         ? `${facts.installedSdkFluxerCommit} (${facts.installedSdkFluxerCommit.slice(0, 7)})`
         : "unknown (older SDK release or not installed)"
     const cliPin = `${facts.cliFluxerCommit} (${facts.cliFluxerCommit.slice(0, 7)})`
+    const intro = options.trace
+        ? "Environment, static project facts and captured --run command output collected by `fluxerly triage`. Known token formats, headers, configured bot token env values and home paths were masked, but review captured output before sharing it publicly"
+        : "Redacted environment and static project facts collected offline by `fluxerly triage`. No `.env` values or secrets were read"
     const lines = [
         "# Fluxerly triage context",
         "",
-        "Redacted environment and static project facts collected offline by `fluxerly triage`. No `.env` values or secrets were read",
+        intro,
         "",
         "## Environment",
         "",
@@ -391,44 +583,45 @@ function formatTriageContext(
         if (check.fix) lines.push(`  Fix: ${check.fix}`)
     }
     if (options.problem) {
-        lines.push("", "## Reported symptom", "", redactInlineText(options.problem, options.homedir))
+        lines.push("", "## Reported symptom", "", redactInlineText(options.problem, options.homedir, options.secrets))
     }
     if (options.logExcerpt) {
         const heading = options.logExcerpt.truncated
             ? `Redacted tail of ${redact(options.logExcerpt.path)} (last ${maxLogExcerptChars} characters):`
             : `Redacted contents of ${redact(options.logExcerpt.path)}:`
-        lines.push("", "## Redacted log excerpt", "", heading, "", "```text", options.logExcerpt.excerpt, "```")
+        const fence = markdownCodeFence(options.logExcerpt.excerpt)
+        lines.push("", "## Redacted log excerpt", "", heading, "", `${fence}text`, options.logExcerpt.excerpt, fence)
     }
     if (options.trace) {
         const { result, redactedOutput, traceFilePath } = options.trace
         const excerptTruncated = redactedOutput.length > maxLogExcerptChars || result.truncated
-        const excerpt =
-            redactedOutput.length > maxLogExcerptChars
-                ? redactedOutput.slice(redactedOutput.length - maxLogExcerptChars)
-                : redactedOutput
+        const excerpt = sliceRedactedTail(redactedOutput, maxLogExcerptChars)
         const statusSummary = result.errorMessage
-            ? `failed to start (${redactInlineText(result.errorMessage, options.homedir)})`
+            ? `failed to start (${redactInlineText(result.errorMessage, options.homedir, options.secrets)})`
             : result.timedOut
               ? `timed out (exit ${result.exitCode ?? "null"}, signal ${result.signal ?? "none"})`
               : `exit ${result.exitCode ?? "null"}${result.signal ? ` (signal ${result.signal})` : ""}`
         lines.push(
             "",
-            "## Redacted debug trace (--run)",
+            "## Captured debug trace (--run)",
             "",
-            `- Command: \`${redactInlineText(result.command, options.homedir)}\``,
+            `- Command: \`${redactInlineText(result.command, options.homedir, options.secrets)}\``,
             `- Outcome: ${statusSummary}`,
+            "- Redaction note: Known token formats, headers, configured bot token env values and home paths were masked. Review captured command output before sharing it publicly",
         )
-        if (traceFilePath) lines.push(`- Full redacted trace file: ${redact(traceFilePath)}`)
+        if (traceFilePath) lines.push(`- Captured trace file: ${redact(traceFilePath)}`)
         if (excerpt.trim().length > 0) {
+            const body = excerpt.trimEnd()
+            const fence = markdownCodeFence(body)
             lines.push(
                 "",
                 excerptTruncated
-                    ? `Redacted trace tail (last ${maxLogExcerptChars} characters):`
-                    : "Redacted trace output:",
+                    ? `Captured trace tail (last ${maxLogExcerptChars} characters):`
+                    : "Captured trace output:",
                 "",
-                "```text",
-                excerpt.trimEnd(),
-                "```",
+                `${fence}text`,
+                body,
+                fence,
             )
         } else {
             lines.push("", "Command produced no stdout or stderr output")
@@ -454,6 +647,7 @@ function writeTriageSession(options: {
     readonly osRelease: string
     readonly osArch: string
     readonly homedir: string
+    readonly secrets?: readonly string[] | undefined
     readonly sessionRoot?: string | undefined
     readonly problem?: string | undefined
     readonly logExcerpt?: { readonly path: string; readonly excerpt: string; readonly truncated: boolean } | undefined
@@ -478,6 +672,7 @@ function writeTriageSession(options: {
         osRelease: options.osRelease,
         osArch: options.osArch,
         homedir: options.homedir,
+        secrets: options.secrets,
         generatedAt: new Date().toISOString(),
         problem: options.problem,
         logExcerpt: options.logExcerpt,
@@ -625,10 +820,11 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
         return 1
     }
 
+    const secrets = envSecrets(env)
     let logExcerpt: { readonly path: string; readonly excerpt: string; readonly truncated: boolean } | undefined
     if (options.log !== undefined) {
         const resolvedLog = isAbsolute(options.log) ? options.log : resolve(targetProject, options.log)
-        const loaded = readRedactedLogTail(resolvedLog, home)
+        const loaded = readRedactedLogTail(resolvedLog, home, secrets)
         if (!loaded.ok) {
             writeError(loaded.message)
             return 1
@@ -636,7 +832,7 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
         logExcerpt = { path: resolvedLog, excerpt: loaded.excerpt, truncated: loaded.truncated }
     }
 
-    const facts = collectProjectFacts(targetProject, environment.packageRoot, nodeVersion)
+    const facts = collectProjectFacts(targetProject, environment.packageRoot, nodeVersion, { readEnvFile: false })
     const theme = createCliTheme(environment.output, { env, platform })
 
     let trace: { readonly result: TriageTraceResult; readonly redactedOutput: string } | undefined
@@ -644,7 +840,9 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
         if (!options.print) {
             const notice = `Running trace command with FLUXERLY_DEBUG=${env.FLUXERLY_DEBUG?.trim() || "rest,gateway"}`
             environment.output.write(
-                theme.capabilities.color === "none" ? `${notice}\n` : `${theme.cyan(theme.symbols.pointer)} ${theme.muted(notice)}\n`,
+                theme.capabilities.color === "none"
+                    ? `${notice}\n`
+                    : `${theme.cyan(theme.symbols.pointer)} ${theme.muted(notice)}\n`,
             )
         }
         const traceRunner = environment.runTraceCommand ?? defaultRunTraceCommand
@@ -652,8 +850,9 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
             cwd: targetProject,
             env,
             timeoutMs: environment.traceTimeoutMs ?? defaultTraceTimeoutMs,
+            ...(traceRunner === defaultRunTraceCommand ? { homedir: home, secrets } : {}),
         })
-        trace = { result, redactedOutput: redactInlineText(result.output, home) }
+        trace = { result, redactedOutput: redactAndTail(result.output, maxTraceCaptureChars, home, secrets).text }
     }
 
     if (options.print) {
@@ -664,6 +863,7 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
             osRelease: currentOsRelease,
             osArch: currentOsArch,
             homedir: home,
+            secrets,
             generatedAt: new Date().toISOString(),
             problem: options.problem,
             logExcerpt,
@@ -679,7 +879,10 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
             version: facts.cliVersion,
             subtitle: "Agent-powered SDK and bot triage",
             detail: redactHomePath(targetProject, home),
-            hint: "Offline facts only. Never reads .env secrets or edits without asking",
+            hint:
+                trace !== undefined
+                    ? "Static facts plus --run trace. Never reads .env directly or edits without asking"
+                    : "Offline facts only. Never reads .env secrets or edits without asking",
         })
         if (banner) environment.output.write(`${banner}\n`)
     }
@@ -693,11 +896,18 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
         osRelease: currentOsRelease,
         osArch: currentOsArch,
         homedir: home,
+        secrets,
         sessionRoot: environment.sessionRoot,
         problem: options.problem,
         logExcerpt,
         trace,
     })
+
+    const sessionFiles = [
+        `  ${session.promptFilePath}`,
+        `  ${session.contextFilePath}`,
+        ...(session.traceFilePath ? [`  ${session.traceFilePath}`] : []),
+    ]
 
     const detect = environment.detectCommand ?? ((command: string) => findCommandOnPath(command, env, platform))
     const installed: { readonly agent: TriageAgentSpec; readonly resolved: string }[] = []
@@ -716,8 +926,7 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
                 [
                     "",
                     "The triage prompt and context were written to:",
-                    `  ${session.promptFilePath}`,
-                    `  ${session.contextFilePath}`,
+                    ...sessionFiles,
                     "",
                     "Run `fluxerly triage --print` to copy the triage brief into any coding agent",
                     "",
@@ -748,18 +957,15 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
         selected = installed.find((entry) => entry.agent.id === picked.id)
     }
 
-    const launchPrompt = buildTriageLaunchPrompt(
-        session.promptFilePath,
-        options.problem !== undefined || logExcerpt !== undefined || trace !== undefined,
-    )
+    const hasInput = options.problem !== undefined || logExcerpt !== undefined || trace !== undefined
+    const launchPrompt = buildTriageLaunchPrompt(session.promptFilePath, hasInput)
     if (!selected) {
         environment.output.write(
             [
                 "No supported terminal coding agent CLI (claude, codex or agy) was found on PATH",
                 "",
-                "The triage playbook and redacted project context were written to:",
-                `  ${session.promptFilePath}`,
-                `  ${session.contextFilePath}`,
+                "The triage playbook and project context were written to:",
+                ...sessionFiles,
                 "",
                 "Paste this prompt into any coding agent, or run `fluxerly triage --print`:",
                 `  ${launchPrompt}`,
@@ -777,10 +983,13 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
         ...(agent.promptArgs ?? []),
         launchPrompt,
     ]
+    const startNote = hasInput
+        ? "It will read the triage context and begin investigating"
+        : "It will read the redacted context and ask what went wrong"
     environment.output.write(
         theme.capabilities.color === "none"
-            ? `Starting ${agent.label}. It will read the redacted context and ask what went wrong\n\n`
-            : `${theme.cyan(theme.symbols.pointer)} Starting ${theme.bold(agent.label)}. ${theme.muted("It will read the redacted context and ask what went wrong")}\n\n`,
+            ? `Starting ${agent.label}. ${startNote}\n\n`
+            : `${theme.cyan(theme.symbols.pointer)} Starting ${theme.bold(agent.label)}. ${theme.muted(startNote)}\n\n`,
     )
 
     const spawnFn = environment.spawnSession ?? defaultSpawnSession
@@ -808,9 +1017,8 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
                 "",
                 `${agent.label} stores its state in ${redactHomePath(stateDir, home)} (override with ${agent.stateDirEnv})`,
                 "",
-                "The triage playbook and redacted project context remain at:",
-                `  ${session.promptFilePath}`,
-                `  ${session.contextFilePath}`,
+                "The triage playbook and project context remain at:",
+                ...sessionFiles,
                 "",
                 `To retry, start \`${agent.command}\` manually or use any coding agent with:`,
                 `  ${launchPrompt}`,

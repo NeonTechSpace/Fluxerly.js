@@ -143,6 +143,7 @@ describe("fluxerly triage playbook, argument parsing and helpers", () => {
             ["--log"],
             ["--run"],
             ["--run", "   "],
+            ["--run", "--print"],
             ["--run", "a", "--run", "b"],
             ["--bogus"],
         ]) {
@@ -334,8 +335,9 @@ describe("fluxerly triage execution modes", () => {
         const err = captureStream()
         const traceOut = captureStream()
 
-        // --print --run with real node child process verifying FLUXERLY_DEBUG, non-zero exit and secret redaction
-        const scriptCmd = `${JSON.stringify(process.execPath)} -e "console.log('DEBUG=' + process.env.FLUXERLY_DEBUG); console.error('Authorization: Bot trace-secret-99999'); console.error('Path: /home/alice/bot/index.js'); process.exit(2)"`
+        // --print --run with real node child process verifying FLUXERLY_DEBUG, non-zero exit and secret redaction in both output and command string
+        const envToken = "UNLABELED_ENV_SECRET_TOKEN_777"
+        const scriptCmd = `${JSON.stringify(process.execPath)} -e "console.log('DEBUG=' + process.env.FLUXERLY_DEBUG); console.log('RAW=' + process.env.FLUXER_BOT_TOKEN); console.error('Authorization: Bot trace-secret-99999'); console.error('Path: /home/alice/bot/index.js'); process.exit(2)" -- ${envToken}`
         expect(
             await runTriage(["--print", "--run", scriptCmd], {
                 project,
@@ -343,7 +345,7 @@ describe("fluxerly triage execution modes", () => {
                 input: new PassThrough(),
                 output: out.stream,
                 errorOutput: err.stream,
-                env: {},
+                env: { FLUXER_BOT_TOKEN: envToken },
                 platform: "linux",
                 homedir: "/home/alice",
                 traceTimeoutMs: 10_000,
@@ -351,11 +353,33 @@ describe("fluxerly triage execution modes", () => {
         ).toBe(0)
         expect(err.read()).toBe("")
         const printed = out.read()
-        expect(printed).toContain("## Redacted debug trace (--run)")
+        expect(printed).toContain("## Captured debug trace (--run)")
+        expect(printed).toContain("Review captured command output before sharing it publicly")
         expect(printed).toContain("Outcome: exit 2")
         expect(printed).toContain("DEBUG=rest,gateway")
         expect(printed).toContain("~/bot/index.js")
         expect(printed).not.toContain("trace-secret-99999")
+        expect(printed).not.toContain(envToken)
+
+        // --run timeout terminates the spawned process tree promptly without hanging on shell grandchildren
+        const timeoutOut = captureStream()
+        const hangCmd = `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 30000)"`
+        const timeoutStart = Date.now()
+        expect(
+            await runTriage(["--print", "--run", hangCmd], {
+                project,
+                packageRoot: sdkRoot,
+                input: new PassThrough(),
+                output: timeoutOut.stream,
+                errorOutput: captureStream().stream,
+                env: {},
+                platform: process.platform,
+                traceTimeoutMs: 120,
+            }),
+        ).toBe(0)
+        const elapsedMs = Date.now() - timeoutStart
+        expect(elapsedMs).toBeLessThan(3_000)
+        expect(timeoutOut.read()).toContain("Outcome: timed out")
 
         // Interactive session writes scrubbed triage-trace.log alongside triage-context.md
         const calls: TriageSpawnRequest[] = []
@@ -398,5 +422,191 @@ describe("fluxerly triage execution modes", () => {
         expect(contextFile).toContain("triage-trace.log")
         expect(contextFile).toContain("Outcome: exit 1")
         expect(contextFile).not.toContain("secret-oauth-xyz")
+    })
+
+    test("triage never reads .env, redacts credentials before truncating logs/trace and kills non-timeout background descendants", async () => {
+        const project = makeBotProject()
+        // Write a .env with a Bot-prefixed token that doctor would flag if read, proving triage does not read .env
+        writeFileSync(join(project, ".env"), "FLUXER_BOT_TOKEN=Bot DO_NOT_READ_ENV_SECRET_42\n")
+        const boundarySecret = "BOUNDARY_TOKEN_SECRET_XYZ_987654321"
+        const logPath = join(project, "boundary.log")
+        // Place the secret right across the 16,000-character tail cut boundary plus embedded triple backticks
+        const suffix = "\n```\ntail-line\n"
+        const logBody = `${boundarySecret}${"x".repeat(16_000 - boundarySecret.length + 1 - suffix.length)}${suffix}`
+        writeFileSync(logPath, logBody)
+
+        const out = captureStream()
+        const err = captureStream()
+        expect(
+            await runTriage(["--print", "--log", logPath], {
+                project,
+                packageRoot: sdkRoot,
+                input: new PassThrough(),
+                output: out.stream,
+                errorOutput: err.stream,
+                env: { FLUXER_BOT_TOKEN: boundarySecret },
+                platform: "linux",
+                homedir: "/home/alice",
+            }),
+        ).toBe(0)
+        expect(err.read()).toBe("")
+        const printedLog = out.read()
+        expect(printedLog).toContain(".env file is present (contents not read by triage)")
+        expect(printedLog).not.toContain("starts with a")
+        expect(printedLog).not.toContain("DO_NOT_READ_ENV_SECRET_42")
+        expect(printedLog).not.toContain(boundarySecret)
+        expect(printedLog).not.toContain(boundarySecret.slice(1))
+        expect(printedLog).toContain("````text")
+
+        // Trace buffer truncation redacts secrets spanning both 24,000-char buffer and 16,000-char excerpt boundaries
+        const traceSecret = "TRACE_BOUNDARY_SECRET_TOKEN_55555"
+        const traceOut = captureStream()
+        const bigCmd = `${JSON.stringify(process.execPath)} -e "process.stdout.write('a'.repeat(5000) + process.env.FLUXER_BOT_TOKEN + 'b'.repeat(7990) + process.env.FLUXER_BOT_TOKEN + 'c'.repeat(15990))"`
+        expect(
+            await runTriage(["--print", "--run", bigCmd], {
+                project,
+                packageRoot: sdkRoot,
+                input: new PassThrough(),
+                output: traceOut.stream,
+                errorOutput: captureStream().stream,
+                env: { FLUXER_BOT_TOKEN: traceSecret },
+                platform: process.platform,
+                traceTimeoutMs: 10_000,
+            }),
+        ).toBe(0)
+        const printedTrace = traceOut.read()
+        expect(printedTrace).not.toContain(traceSecret)
+        expect(printedTrace).not.toContain(traceSecret.slice(4))
+
+        // Oversized single lines (>256 KiB) are omitted completely rather than sliced mid-line
+        const hugeOut = captureStream()
+        const hugeCmd = `${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(262140) + 'OVERSIZED_LINE_SECRET_9999' + '\\nafter-huge\\n')"`
+        expect(
+            await runTriage(["--print", "--run", hugeCmd], {
+                project,
+                packageRoot: sdkRoot,
+                input: new PassThrough(),
+                output: hugeOut.stream,
+                errorOutput: captureStream().stream,
+                env: { FLUXER_BOT_TOKEN: "OVERSIZED_LINE_SECRET_9999" },
+                platform: process.platform,
+                traceTimeoutMs: 10_000,
+            }),
+        ).toBe(0)
+        const printedHuge = hugeOut.read()
+        expect(printedHuge).toContain("[omitted oversized line]")
+        expect(printedHuge).toContain("after-huge")
+        expect(printedHuge).not.toContain("OVERSIZED_LINE_SECRET_9999")
+        expect(printedHuge).not.toContain("OVERSIZED")
+
+        // Full-file redaction prevents severed credentials when later redactions shrink the log, and [redacted] is never sliced mid-marker
+        const shrinkLog = join(project, "shrink.log")
+        const shrinkBody = `${"p".repeat(100)}Authorization: shortsecret999\npassword=${"s".repeat(6000)}\n${"q".repeat(15_995)}\n`
+        writeFileSync(shrinkLog, shrinkBody)
+        const shrinkOut = captureStream()
+        expect(
+            await runTriage(["--print", "--log", shrinkLog], {
+                project,
+                packageRoot: sdkRoot,
+                input: new PassThrough(),
+                output: shrinkOut.stream,
+                errorOutput: captureStream().stream,
+                env: {},
+                platform: "linux",
+                homedir: "/home/alice",
+            }),
+        ).toBe(0)
+        const printedShrink = shrinkOut.read()
+        expect(printedShrink).not.toContain("shortsecret999")
+        expect(printedShrink).not.toContain("ssssss")
+
+        // Tail slice landing inside lowercase [redacted] steps cleanly past the marker instead of emitting "cted]"
+        const markerLog = join(project, "marker.log")
+        const markerBody = `Authorization: splitmarker12345${"B".repeat(15_995)}`
+        writeFileSync(markerLog, markerBody)
+        const markerOut = captureStream()
+        expect(
+            await runTriage(["--print", "--log", markerLog], {
+                project,
+                packageRoot: sdkRoot,
+                input: new PassThrough(),
+                output: markerOut.stream,
+                errorOutput: captureStream().stream,
+                env: {},
+                platform: "linux",
+                homedir: "/home/alice",
+            }),
+        ).toBe(0)
+        const printedMarker = markerOut.read()
+        expect(printedMarker).not.toContain("splitmarker12345")
+        expect(printedMarker).not.toContain("cted]BBBBB")
+
+        // On POSIX, background children (both redirected AND inheriting stdout/stderr) are cleaned up cleanly without false timeout
+        if (process.platform !== "win32") {
+            const bgOut = captureStream()
+            const bgCmd = "sleep 30 >/dev/null 2>&1 & echo BG_PID=$!"
+            expect(
+                await runTriage(["--print", "--run", bgCmd], {
+                    project,
+                    packageRoot: sdkRoot,
+                    input: new PassThrough(),
+                    output: bgOut.stream,
+                    errorOutput: captureStream().stream,
+                    env: {},
+                    platform: process.platform,
+                    traceTimeoutMs: 10_000,
+                }),
+            ).toBe(0)
+            const match = /BG_PID=(\d+)/.exec(bgOut.read())
+            expect(match).not.toBeNull()
+            const bgPid = Number(match![1])
+            let alive = true
+            for (let attempt = 0; attempt < 20; attempt++) {
+                try {
+                    process.kill(bgPid, 0)
+                    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25))
+                } catch {
+                    alive = false
+                    break
+                }
+            }
+            expect(alive).toBe(false)
+
+            // Inherited stdout/stderr background child finishes with exit 0 (NOT timed out) and is cleaned up
+            const inheritedOut = captureStream()
+            const inheritedStart = Date.now()
+            expect(
+                await runTriage(["--print", "--run", "sleep 30 & echo INHERITED_OK=$!"], {
+                    project,
+                    packageRoot: sdkRoot,
+                    input: new PassThrough(),
+                    output: inheritedOut.stream,
+                    errorOutput: captureStream().stream,
+                    env: {},
+                    platform: process.platform,
+                    traceTimeoutMs: 500,
+                }),
+            ).toBe(0)
+            const inheritedElapsed = Date.now() - inheritedStart
+            const inheritedPrinted = inheritedOut.read()
+            expect(inheritedElapsed).toBeLessThan(1_000)
+            expect(inheritedPrinted).toContain("Outcome: exit 0")
+            expect(inheritedPrinted).not.toContain("timed out")
+            expect(inheritedPrinted).toContain("INHERITED_OK=")
+            const inheritedMatch = /INHERITED_OK=(\d+)/.exec(inheritedPrinted)
+            expect(inheritedMatch).not.toBeNull()
+            const inheritedPid = Number(inheritedMatch![1])
+            let inheritedAlive = true
+            for (let attempt = 0; attempt < 20; attempt++) {
+                try {
+                    process.kill(inheritedPid, 0)
+                    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25))
+                } catch {
+                    inheritedAlive = false
+                    break
+                }
+            }
+            expect(inheritedAlive).toBe(false)
+        }
     })
 })

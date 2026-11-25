@@ -72,10 +72,7 @@ const optionGroups: readonly {
             ["--model <id>", "Passes a model identifier through to the chosen agent CLI"],
             ["--dir <folder>", "Targets a bot project folder other than the current directory"],
             ["--log <file>", "Includes a redacted tail (up to 16 KB) of a local log file in triage context"],
-            [
-                "--run <command>",
-                "Runs <command> once with FLUXERLY_DEBUG=rest,gateway and attaches redacted output",
-            ],
+            ["--run <command>", "Runs <command> once with FLUXERLY_DEBUG=rest,gateway and attaches redacted output"],
             ["--print", "Prints the triage playbook and redacted context without starting an agent"],
         ],
     },

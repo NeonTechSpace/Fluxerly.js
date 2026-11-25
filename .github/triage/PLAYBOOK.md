@@ -17,7 +17,7 @@ Read `triage-context.md` before investigating. It records:
 - Installed versions of `effect`, `typescript` and `@types/node`
 - Exact local paths to the installed SDK package folder, TypeScript source (`src/`) and `agents/AGENTS.md`
 - The complete static `fluxerly doctor` report
-- Optional `Reported symptom`, `Redacted log excerpt` (`--log`) or `Redacted debug trace (--run)` sections when the user supplied them on the command line
+- Optional `Reported symptom`, `Redacted log excerpt` (`--log`) or `Captured debug trace (--run)` sections when the user supplied them on the command line
 
 Never assume the CLI version matches the project's installed SDK version: A user can run `npx` or a newer CLI against an older installed package
 
