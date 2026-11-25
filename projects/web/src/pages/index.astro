@@ -22,24 +22,24 @@ const graph = faq ? [...homeGraph, faq] : homeGraph
     <Night
         stops={[
             { id: "first-reply", label: "Your First Reply" },
-            { id: "why", label: "Why Fluxerly Was Built" },
             { id: "already-there", label: "Already Built" },
             { id: "grows", label: "From One File to a Full Application" },
+            { id: "tools", label: "Tools That Come with the SDK" },
             { id: "neonflux", label: "Meet NeonFlux" },
             { id: "quality", label: "Quality, Speed and Security" },
+            { id: "why", label: "Why Fluxerly Was Built" },
             { id: "questions", label: "The Questions That Come Up First" },
-            { id: "tools", label: "Tools That Come with the SDK" },
             { id: "install", label: "Install It" },
         ]}
     >
         <FirstReply />
-        <Maker />
         <AlreadyThere />
         <Grows />
+        <Tools />
         <NeonFlux />
         <Checked />
+        <Maker />
         <Questions />
-        <Tools />
         <Install />
     </Night>
 </Site>

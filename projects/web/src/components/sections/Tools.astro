@@ -9,31 +9,36 @@ const code = (text: string) => `<code class="inline-code">${text}</code>`
 // Each tool ends in the page it is read about, or the command that runs it
 const items = [
     {
-        title: "Docs and Source in Your Editor",
-        text: `The documentation lives in the type declarations alongside the shipped TypeScript ${code("src/")} files and source maps, so autocompletion and go-to-definition show the exact code and reference text`,
+        title: "Browser SDK Playground",
+        text: `Write and run real JavaScript, TypeScript and Effect bots in the browser on an in-memory Fluxer gateway with live 429, 403 and WebSocket fault injection, plus REST and WebSocket inspection`,
+        href: links.playground,
+        link: "Open the Playground",
+    },
+    {
+        title: "Offline Setup Checks",
+        text: `Run ${code("fluxerly doctor")} offline before a bot connects to catch Node.js, ESM, ${code("tsconfig.json")}, TypeScript 7, Effect peer, ${code(".gitignore")} and ${code(".env")} token prefix mistakes without printing secrets`,
+        command: "npx --no fluxerly doctor",
+    },
+    {
+        title: "Agent-Powered Triage",
+        text: `Run ${code("fluxerly triage")} to bundle redacted project facts, the pinned Fluxer server commit and optional live traces for Antigravity, Claude Code, Codex, OpenCode, T3 Code or any other coding agent`,
+        command: "npx --no fluxerly triage",
+    },
+    {
+        title: "Docs, Source and Test Helpers",
+        text: `Shipped TypeScript ${code("src/")} files, source maps, type docs and ${code("/testing")} plus ${code("/effect/testing")} entry points come in the package so editors show exact code and projects start with offline tests`,
         href: links.apiReference,
         link: "API Reference",
     },
     {
-        title: "Test Helpers Included",
-        text: `The ${code("/testing")} and ${code("/effect/testing")} entry points come with the SDK. A project from ${code("fluxerly init")} starts with its first zero-network test`,
-        href: guide("testing"),
-        link: "Testing Guide",
-    },
-    {
-        title: "Project Checks, Triage and Invite CLI",
-        text: `Run ${code("fluxerly doctor")} for offline static checks on Node.js, ESM, ${code("tsconfig.json")}, TypeScript 7, Effect and installed package drift, ${code("fluxerly triage")} to investigate bot or SDK bugs with Claude Code, Codex, Antigravity, OpenCode, T3 Code or any other coding agent against shipped ${code("src/")}, and ${code("fluxerly invite")} to build permission URLs offline`,
-        command: "npx --no fluxerly triage",
-    },
-    {
-        title: "Rules and Skills for Coding Agents",
-        text: `The ${code("fluxerly agents")} command syncs the SDK's rules into ${code("AGENTS.md")}, ${code("SKILL.md")}, Cursor, Claude and Gemini rule files, and the docs publish ${code("SKILL.md")} and ${code("llms.txt")}. The rules are plain text a person can read too, and nothing here needs an AI tool`,
+        title: "Agent Rules and Invite CLI",
+        text: `Sync SDK rules into ${code("AGENTS.md")}, ${code("SKILL.md")}, Cursor, Claude and Gemini files with ${code("fluxerly agents")}, or generate bot invite URLs offline with ${code("fluxerly invite")}`,
         command: "npx --no fluxerly agents",
     },
 ]
 
 // The tools in short, under the lead
-const facts = ["Docs and source in the package", "Test helpers included", "Offline doctor, agent triage and invite CLI", "Rules and skills for coding agents"]
+const facts = ["Browser playground with fault injection", "Offline doctor setup checks", "Agent triage for any harness", "Docs, source and offline tests", "Agent rules and invite CLI"]
 ---
 
 <section class="tools" id="tools" aria-labelledby="tools-title" data-accent="violet">
