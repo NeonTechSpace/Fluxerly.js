@@ -36,6 +36,8 @@ export interface FaceState {
     bow: FacePart
     gaze: { x: number; y: number }
     joy: number
+    // How far the eyelids have closed during a blink, from 0 open to 1 shut
+    blink: number
 }
 
 // Blinks: one every few seconds at random, now and then twice, each closing quickly and opening a little slower
@@ -46,7 +48,10 @@ const blinkGap = 0.34
 const blinkClose = 0.07
 const blinkShut = 0.05
 const blinkOpen = 0.16
-const blinkLid = 0.07
+const blinkLid = 0
+// Gentle elastic squash during a blink before the curved lids eclipse the eye cleanly to dark
+const blinkSquashY = 0.28
+const blinkSwellX = 0.055
 // How far the eyes travel at the end of a look, in canvas pixels. Then quick moves between places, as eyes make them, that
 // start and land softly: a spring that settles in about a third of a second without overshooting
 const eyeTravel = 22
@@ -80,6 +85,10 @@ const bowSeconds = 1.6
 const bowSwell = 0.015
 
 const tau = Math.PI * 2
+const smoothstep = (edge0: number, edge1: number, x: number) => {
+    const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)))
+    return t * t * (3 - 2 * t)
+}
 
 // How far one blink has closed the eyes, from 1 open to the lid share shut, by its age in seconds
 export function lid(age: number): number {
@@ -144,6 +153,7 @@ export function createFaceLife(random: () => number, quietAt: (time: number) => 
         bow: part(),
         gaze: { x: 0, y: 0 },
         joy: 0,
+        blink: 0,
     }
 
     return {
@@ -198,18 +208,21 @@ export function createFaceLife(random: () => number, quietAt: (time: number) => 
             const lifted = since > 0 && since < 1 ? Math.sin(Math.PI * Math.min(1, since * 1.15)) ** 2 : 0
 
             const dip = 1 - shut
+            const blink = dip * wake
+            const softBlink = smoothstep(0, 0.85, blink)
             const gazeX = eyes.x * wake
             const gazeY = eyes.y * wake
             state.gaze.x = gazeX
             state.gaze.y = gazeY
             state.joy = joy * wake
+            state.blink = blink
 
             state.eyes.forEach((eye, i) => {
                 const breathe = 0.012 * Math.sin((tau * t) / (6.1 + i * 1.3) + i * 2) * wake
                 eye.x = gazeX * eyeTravel
                 eye.y = gazeY * eyeTravel * 0.72
-                eye.scaleX = 1 + breathe + 0.035 * attention * wake - 0.02 * gazeX * (i === 0 ? 1 : -1) * Math.abs(gazeX)
-                eye.scaleY = (1 - breathe * 0.6 + 0.04 * attention * wake - 0.2 * state.joy) * (1 - (1 - shut) * wake)
+                eye.scaleX = (1 + breathe + 0.035 * attention * wake - 0.02 * gazeX * (i === 0 ? 1 : -1) * Math.abs(gazeX)) * (1 + blinkSwellX * softBlink)
+                eye.scaleY = (1 - breathe * 0.6 + 0.04 * attention * wake - 0.2 * state.joy) * (1 - blinkSquashY * softBlink)
             })
             state.brows.forEach((one, i) => {
                 const alone = brow.which === 2 || brow.which === i ? lifted : 0

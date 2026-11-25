@@ -16,10 +16,9 @@ const iconLimit = 1000
 const pictureLimit = 4000
 
 export function startHero(hero: HTMLElement) {
-    const iconsHere = placeSkyIcons(hero)
     watchControlReflections(hero)
-    // Start downloading the scene chunk as soon as the conductor's picture is decoded, in parallel with the
-    // sky icons and first paint, while still waiting for afterPaint before mounting WebGL
+    // Start downloading the scene chunk right away in parallel with the preloaded mascot image and stylesheets,
+    // while still waiting for the mascot decode and first paint before mounting WebGL
     let preloadedScene: Promise<typeof import("../scene/hero-scene")> | null = null
     let preloadedFrame: Promise<typeof import("../scene/hero-frame")> | null = null
     const preload = <T,>(load: () => Promise<T>, clear: () => void): Promise<T> => {
@@ -27,17 +26,17 @@ export function startHero(hero: HTMLElement) {
         void promise.catch(clear)
         return promise
     }
-    void pictureReady(hero).then(() => {
-        if (getExperience() === "still") {
-            preloadedFrame ??= preload(() => import("../scene/hero-frame"), () => {
-                preloadedFrame = null
-            })
-        } else {
-            preloadedScene ??= preload(() => import("../scene/hero-scene"), () => {
-                preloadedScene = null
-            })
-        }
-    })
+    if (getExperience() === "still") {
+        preloadedFrame = preload(() => import("../scene/hero-frame"), () => {
+            preloadedFrame = null
+        })
+    } else {
+        preloadedScene = preload(() => import("../scene/hero-scene"), () => {
+            preloadedScene = null
+        })
+    }
+    const mascotHere = pictureReady(hero)
+    void placeSkyIcons(hero, mascotHere)
     const takeScene = () => {
         const next = preloadedScene
         preloadedScene = null
@@ -48,12 +47,12 @@ export function startHero(hero: HTMLElement) {
         preloadedFrame = null
         return next
     }
-    // The scene's start holds the page up for a moment, so the page gets its first frame with the icons in it first
-    void iconsHere.then(afterPaint).then(() => driveScene(hero, takeScene, takeFrame))
+    // Mount WebGL right after the mascot decodes and paints instead of waiting up to 1 s for every sky icon
+    void mascotHere.then(afterPaint).then(() => driveScene(hero, takeScene, takeFrame))
 }
 
 // The icons in the sky take the places the scene will draw them in, read from the same numbers, so nothing appears or moves when it takes over
-async function placeSkyIcons(hero: HTMLElement): Promise<void> {
+async function placeSkyIcons(hero: HTMLElement, mascotHere: Promise<void>): Promise<void> {
     const box = hero.querySelector<HTMLElement>(".sky-icons")
     const icons = [...hero.querySelectorAll<HTMLImageElement>("[data-sky-icon]")]
     const parts = findHeroParts(hero)
@@ -81,6 +80,12 @@ async function placeSkyIcons(hero: HTMLElement): Promise<void> {
     new ResizeObserver(place).observe(hero)
     void document.fonts?.ready.then(place)
     place()
+    // On a first visit, switch visible sky icons from lazy to eager as soon as the conductor's picture settles
+    if (document.documentElement.dataset.iconsHeld !== undefined) {
+        void mascotHere.then(() => {
+            for (const icon of icons) if (!icon.hidden) icon.loading = "eager"
+        })
+    }
     // Not longer than a slow network's patience: the scene doesn't wait for a picture that never comes
     const mascot = hero.querySelector<HTMLImageElement>("[data-mascot]")
     const pictures = [...icons.filter((icon) => !icon.hidden), ...(mascot ? [mascot] : [])]
@@ -100,7 +105,7 @@ async function placeSkyIcons(hero: HTMLElement): Promise<void> {
     lift()
 }
 
-const afterPaint = () => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))
+const afterPaint = () => new Promise<void>((done) => requestAnimationFrame(() => window.setTimeout(done, 0)))
 
 function watchControlReflections(hero: HTMLElement) {
     const wrap = hero.querySelector<HTMLElement>("[data-controls]")
@@ -118,8 +123,8 @@ function watchControlReflections(hero: HTMLElement) {
     update()
 }
 
-// The conductor's picture alone, decoded, or the wait given up on a slow network. The scene's code, 640 KB, waits for it, so the picture is not slowed by that download
-// and the conductor stands before the live sky takes over from it
+// The conductor's picture alone, decoded, or the wait given up on a slow network. Mounting WebGL waits for it so the
+// painted conductor stands whole before the live sky fades in over it
 function pictureReady(hero: HTMLElement): Promise<void> {
     const mascot = hero.querySelector<HTMLImageElement>("[data-mascot]")
     if (!mascot || (mascot.complete && mascot.naturalWidth > 0)) return Promise.resolve()

@@ -10,8 +10,8 @@ import { bowFile, bowSrcset, bowUnderFile, mascotWidthOf } from "../lib/art"
 import type { FacePart } from "./face-life"
 
 export interface Bow {
-    // Loads the pictures and puts them on the conductor once they are decoded
-    load(): Promise<void>
+    // Loads the pictures and puts them on the conductor once decoded; optional gate waits before DOM mount
+    load(readyToMount?: Promise<void>): Promise<void>
     render(bow: FacePart): void
     release(): void
 }
@@ -104,9 +104,10 @@ export function createBow(conductor: HTMLElement, mascot: HTMLImageElement): Bow
     }
 
     return {
-        async load() {
+        async load(readyToMount) {
             await whole(mascot)
             await Promise.all([whole(bow), draw()])
+            if (readyToMount) await readyToMount
             if (released) throw new Error("released")
             // Over the painted conductor and under its face and cap, which come after it
             mascot.after(body)
@@ -115,7 +116,8 @@ export function createBow(conductor: HTMLElement, mascot: HTMLImageElement): Bow
             // The copy is drawn by now, so the painted conductor goes from under it a frame later, where the live bow's turns would
             // show its bow
             await new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))
-            if (!released) mascot.style.visibility = "hidden"
+            if (released) throw new Error("released")
+            mascot.style.visibility = "hidden"
             // A file the window picked while this loaded
             follow()
         },
@@ -125,9 +127,10 @@ export function createBow(conductor: HTMLElement, mascot: HTMLImageElement): Bow
         release() {
             released = true
             mascot.removeEventListener("load", follow)
-            mascot.style.visibility = ""
             body.remove()
             bow.remove()
+            // Restore the painted mascot once no live bow remains mounted on the conductor
+            if (!conductor.querySelector("[data-bow]")) mascot.style.visibility = ""
         },
     }
 }

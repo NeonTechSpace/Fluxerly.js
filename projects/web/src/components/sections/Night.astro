@@ -843,6 +843,7 @@ const { stops } = Astro.props
         let lightFrame = 0
         const lightStep = () => {
             lightFrame = 0
+            if (!built) return
             const scrollY = scrollTop
             const lx = nightLeft + torchNow.x * zoom
             const ly = torchNow.y * zoom
@@ -889,29 +890,46 @@ const { stops } = Astro.props
             if (!lightFrame) lightFrame = requestAnimationFrame(lightStep)
         }
 
+        let settle = 0
+        let deferredTimer = 0
+        const ensureBuilt = () => {
+            if (deferredTimer) {
+                window.clearTimeout(deferredTimer)
+                deferredTimer = 0
+            }
+            if (!built) build()
+        }
+        const scheduleRebuild = (delay = 120) => {
+            if (!built) return
+            window.clearTimeout(settle)
+            settle = window.setTimeout(build, delay)
+        }
+
         const onScroll = () => {
             scrollTop = window.scrollY
+            if (!built) {
+                ensureBuilt()
+                return
+            }
             if (ticking) return
             ticking = true
             requestAnimationFrame(reach)
         }
         window.addEventListener("scroll", onScroll, { passive: true })
-        // The first size draws the line at once. After that it redraws when the size has settled, because an FAQ answer gliding open
+        // After the first build, redraw once the size has settled, because an FAQ answer gliding open
         // resizes the page on every frame, and the line is costly to lay out
         let sized = false
-        let settle = 0
         const resize = new ResizeObserver(() => {
             if (!sized) {
                 sized = true
-                build()
                 return
             }
-            window.clearTimeout(settle)
-            settle = window.setTimeout(build, 120)
+            scheduleRebuild(120)
         })
         resize.observe(night)
         // A screen that changes height moves the hero's end and the reading line, without resizing the night
         window.addEventListener("resize", () => {
+            if (!built) return
             measureScroll()
             measureFloats()
             sectionTops = sections.map((section) => section.getBoundingClientRect().top + window.scrollY)
@@ -923,6 +941,7 @@ const { stops } = Astro.props
         // while the world is alive, at once with time stopped. The browser's own jump is not used: it lands
         // short of a section still rising into place, and the same link twice would move the page again
         const jumpTo = (id: string) => {
+            ensureBuilt()
             const target = document.getElementById(id)
             if (!target) return false
             const top = target.getBoundingClientRect().top + window.scrollY - parseFloat(getComputedStyle(target).scrollMarginTop)
@@ -942,7 +961,9 @@ const { stops } = Astro.props
             event.preventDefault()
             if (location.hash !== `#${id}`) history.pushState(null, "", `#${id}`)
         })
-        document.fonts?.ready.then(build)
+        document.fonts?.ready.then(() => {
+            if (built) scheduleRebuild(0)
+        })
         // Time stopping or starting again changes the beads and the reader's light
         const onTimeChange = () => {
             if (night.hasAttribute("data-still") && torchOn) {
@@ -950,11 +971,27 @@ const { stops } = Astro.props
                 night.toggleAttribute("data-torch-on", false)
                 wakeLight()
             }
+            if (isStill() && !built) ensureBuilt()
             reach()
             wakeSignal()
         }
         subscribeExperience(onTimeChange)
-        build()
+        // Below-the-fold layout and SVG bead setup cost ~160 ms on load. Defer it until the hero's live
+        // sky has mounted, the visitor scrolls, or a fallback timer fires so the hero starts unblocked
+        const heroEl = document.querySelector<HTMLElement>("[data-hero]")
+        const nearFold = isStill() || window.scrollY > 0 || location.hash.length > 1 || !heroEl || heroEl.dataset.scene === "live" || night.getBoundingClientRect().top < window.innerHeight + 120
+        if (nearFold) {
+            build()
+        } else {
+            window.addEventListener(
+                "fluxerly:hero-ready",
+                () => {
+                    if (!built) window.setTimeout(ensureBuilt, 500)
+                },
+                { once: true },
+            )
+            deferredTimer = window.setTimeout(ensureBuilt, 1500)
+        }
     }
 </script>
 

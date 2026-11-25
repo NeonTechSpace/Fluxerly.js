@@ -111,8 +111,19 @@ test("real browser Fluxerly SDK runtime boots and executes every playground pres
             sandbox.send({ type: "say", requestId: reqSeq++, content: firstMessage })
             const sayResult = await sandbox.nextMessage("sayResult")
             assert.equal(sayResult.ok, true, `Preset "${preset.id}" say("${firstMessage}") failed`)
-            const replies = sayResult.replies as { content: string; embeds: unknown[] }[]
+            const replies = sayResult.replies as { content: string; embeds: { fields?: { value: string }[] }[] }[]
             assert.ok(replies.length >= 1, `Preset "${preset.id}" should reply to "${firstMessage}"`)
+            if (preset.id === "embeds") {
+                const published = replies[0]?.embeds?.[0]?.fields?.find((field) => field.value.includes("<t:"))
+                assert.ok(published && published.value.endsWith(":R>"), `Expected relative timestamp tag, got: ${JSON.stringify(replies[0])}`)
+            }
+            if (preset.id === "results") {
+                sandbox.send({ type: "say", requestId: reqSeq++, content: "!check" })
+                const checkResult = await sandbox.nextMessage("sayResult")
+                assert.equal(checkResult.ok, true, "Results preset !check command failed")
+                const checkReplies = checkResult.replies as { content: string }[]
+                assert.match(checkReplies[0]?.content ?? "", /Not found: true/i)
+            }
         }
 
         // Verify real fault injection (429 automatic retry, 403 Result error and gateway disconnect resume)

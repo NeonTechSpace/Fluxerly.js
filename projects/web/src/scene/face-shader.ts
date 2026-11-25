@@ -99,6 +99,7 @@ export const faceShader = {
         uniform vec4 uCheek[2];
         uniform vec2 uGaze, uView, uCharge;
         #ifndef HOLE_ONLY
+        uniform float uBlink;
         uniform vec2 uMistTurn;
         #endif
         uniform vec2 uDustPos[${faceDustCount}];
@@ -125,6 +126,8 @@ export const faceShader = {
         // Where the face's parts hinge: each eye's middle, each brow's, each crescent's. Between the strokes of the waves
         const vec2 eyeCenter0 = vec2(761.5, 1080.5);
         const vec2 eyeCenter1 = vec2(1268.5, 1056.5);
+        // Eyelid axis aligned with the brow line from eyeCenter0 to eyeCenter1 (-2.7 deg)
+        const vec2 headTilt = vec2(0.9989, -0.0473);
         const vec2 browCenter0 = vec2(761.0, 930.0);
         const vec2 browCenter1 = vec2(1269.0, 909.0);
         const vec2 cheekCenter0 = vec2(684.0, 1271.0);
@@ -329,19 +332,51 @@ export const faceShader = {
             }
 
             #ifndef HOLE_ONLY
-            // The eyes: each moves, widens and closes around its own middle, with a soft light in it that follows the look
-            vec2 eyeAt0 = eyeCenter0 + (p - eyeCenter0 - uEye[0].xy) / uEye[0].zw;
+            // The eyes: each moves, breathes and blinks with soft squash plus a curved eyelid eclipse so the last frames close cleanly to dark
+            vec2 eyeD0 = p - eyeCenter0 - uEye[0].xy;
+            vec2 eyeLocal0 = uBlink > 0.0001 ? turnCS(headTilt) * eyeD0 : eyeD0;
+            vec2 eyeAt0 = uBlink > 0.0001
+                ? eyeCenter0 + turnCS(vec2(headTilt.x, -headTilt.y)) * ((eyeLocal0 - vec2(0.0, uBlink * 14.0)) / uEye[0].zw)
+                : eyeCenter0 + eyeD0 / uEye[0].zw;
             if (inBox(eyesBox, eyeAt0) && eyeAt0.x <= faceSplit + boxPad) {
                 vec4 eye0 = part(uEyes, eyesBox, eyeAt0, -0.25) * step(eyeAt0.x, faceSplit);
                 vec2 glint0 = eyeCenter0 + vec2(-24.0, -34.0) + uGaze * vec2(26.0, 20.0);
                 eye0.rgb += eye0.a * smoothstep(40.0, 6.0, length(eyeAt0 - glint0)) * 0.2 * wake;
+                if (uBlink > 0.0001) {
+                    float nx0 = clamp(eyeLocal0.x / 72.0, -1.6, 1.6);
+                    float arch0 = 22.0 * nx0 * nx0;
+                    float upperY0 = mix(-185.0, 50.0, uBlink) + arch0 * (0.3 + 0.7 * uBlink);
+                    float lowerY0 = mix(165.0, 50.0, pow(uBlink, 1.4)) - 10.0 * nx0 * nx0 * uBlink;
+                    float feather0 = mix(18.0, 8.0, uBlink);
+                    float topMask0 = smoothstep(upperY0 - feather0, upperY0 + feather0, eyeLocal0.y);
+                    float botMask0 = 1.0 - smoothstep(lowerY0 - feather0, lowerY0 + feather0, eyeLocal0.y);
+                    float shutFade0 = 1.0 - smoothstep(0.86, 1.0, uBlink);
+                    float lid0 = mix(1.0, topMask0 * botMask0 * shutFade0, smoothstep(0.0, 0.08, uBlink));
+                    eye0 *= lid0;
+                }
                 color = over(color, eye0);
             }
-            vec2 eyeAt1 = eyeCenter1 + (p - eyeCenter1 - uEye[1].xy) / uEye[1].zw;
+            vec2 eyeD1 = p - eyeCenter1 - uEye[1].xy;
+            vec2 eyeLocal1 = uBlink > 0.0001 ? turnCS(headTilt) * eyeD1 : eyeD1;
+            vec2 eyeAt1 = uBlink > 0.0001
+                ? eyeCenter1 + turnCS(vec2(headTilt.x, -headTilt.y)) * ((eyeLocal1 - vec2(0.0, uBlink * 14.0)) / uEye[1].zw)
+                : eyeCenter1 + eyeD1 / uEye[1].zw;
             if (inBox(eyesBox, eyeAt1) && eyeAt1.x >= faceSplit - boxPad) {
                 vec4 eye1 = part(uEyes, eyesBox, eyeAt1, -0.25) * step(faceSplit, eyeAt1.x);
                 vec2 glint1 = eyeCenter1 + vec2(-24.0, -34.0) + uGaze * vec2(26.0, 20.0);
                 eye1.rgb += eye1.a * smoothstep(40.0, 6.0, length(eyeAt1 - glint1)) * 0.2 * wake;
+                if (uBlink > 0.0001) {
+                    float nx1 = clamp(eyeLocal1.x / 72.0, -1.6, 1.6);
+                    float arch1 = 22.0 * nx1 * nx1;
+                    float upperY1 = mix(-185.0, 50.0, uBlink) + arch1 * (0.3 + 0.7 * uBlink);
+                    float lowerY1 = mix(165.0, 50.0, pow(uBlink, 1.4)) - 10.0 * nx1 * nx1 * uBlink;
+                    float feather1 = mix(18.0, 8.0, uBlink);
+                    float topMask1 = smoothstep(upperY1 - feather1, upperY1 + feather1, eyeLocal1.y);
+                    float botMask1 = 1.0 - smoothstep(lowerY1 - feather1, lowerY1 + feather1, eyeLocal1.y);
+                    float shutFade1 = 1.0 - smoothstep(0.86, 1.0, uBlink);
+                    float lid1 = mix(1.0, topMask1 * botMask1 * shutFade1, smoothstep(0.0, 0.08, uBlink));
+                    eye1 *= lid1;
+                }
                 color = over(color, eye1);
             }
 

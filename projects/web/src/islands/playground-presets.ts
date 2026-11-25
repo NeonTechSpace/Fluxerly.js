@@ -105,7 +105,7 @@ export default defineBot({
             check: {
                 description: "Trigger a clean 404 on an unmatched channel fetch",
                 execute: async ({ client, reply }) => {
-                    const fetched = await client.channels.get("999999999")
+                    const fetched = await client.channels.fetch("999999999")
                     if (fetched.isErr()) {
                         console.warn(describeError(fetched.error))
                         return reply(\`Not found: \${errors.isNotFound(fetched.error)} (\${fetched.error.code})\`)
@@ -188,7 +188,7 @@ export default defineBot({
                         .description(values.summary)
                         .color(colors.parse("#46e3ef"))
                         .field("Channel", "Stable", { inline: true })
-                        .field("Published", format.timestamp(new Date(), TimestampStyles.relative), { inline: true })
+                        .field("Published", format.timestamp(new Date(), TimestampStyles.RelativeTime), { inline: true })
                         .footer({ text: "Validated by EmbedBuilder" })
                         .build()
                     return reply({ content: "New release ready", embeds: [card] })

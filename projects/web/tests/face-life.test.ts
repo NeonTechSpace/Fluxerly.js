@@ -32,6 +32,7 @@ test("at wake 0 every part of the face stands as painted, at any moment", () => 
             assert.equal(part.scaleX, 1)
             assert.equal(part.scaleY, 1)
         }
+        assert.equal(state.blink, 0)
     }
 })
 
@@ -57,10 +58,23 @@ test("awake, each part of the face moves, and the two sides don't move as one", 
     assert.ok(apart > 2, "the brows only ever move together")
 })
 
-test("a blink closes the eyes and opens them again", () => {
+test("a blink closes the eyes and opens them again without flattening scaleY near zero", () => {
     assert.equal(lid(-1), 1)
-    assert.ok(lid(0.09) < 0.1)
+    assert.equal(lid(0.09), 0)
     assert.equal(lid(1), 1)
+
+    const life = make()
+    life.update({ ...mood, time: 0, wake: 1 })
+    life.blink(1)
+    let peakBlink = 0
+    let minScaleY = 1
+    for (let t = 1; t <= 1.35; t += 0.005) {
+        const state = life.update({ ...mood, time: t, wake: 1 })
+        peakBlink = Math.max(peakBlink, state.blink)
+        minScaleY = Math.min(minScaleY, state.eyes[0].scaleY, state.eyes[1].scaleY)
+    }
+    assert.equal(peakBlink, 1)
+    assert.ok(minScaleY > 0.65, `eye scaleY flattened too far during blink: ${minScaleY.toFixed(3)}`)
 })
 
 test("looking is bounded and holds the place it was told", () => {

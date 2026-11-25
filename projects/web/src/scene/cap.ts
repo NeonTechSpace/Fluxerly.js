@@ -6,8 +6,8 @@ import { mascotArt } from "../lib/art"
 import type { FaceState } from "./face-life"
 
 export interface Cap {
-    // Loads the pictures and puts them on the conductor once they are decoded
-    load(): Promise<void>
+    // Loads the pictures and puts them on the conductor once decoded; optional gate waits before DOM mount
+    load(readyToMount?: Promise<void>): Promise<void>
     render(cap: FaceState["cap"]): void
     release(): void
 }
@@ -42,8 +42,9 @@ export function createCap(conductor: HTMLElement): Cap {
     const transform = (part: FaceState["cap"]["whole"]) => `scale(${part.scaleX.toFixed(5)}, ${part.scaleY.toFixed(5)}) rotate(${part.turn.toFixed(5)}rad)`
 
     return {
-        async load() {
+        async load(readyToMount) {
             await Promise.all([fan, fold, seat].map((image) => image.decode()))
+            if (readyToMount) await readyToMount
             if (released) throw new Error("released")
             conductor.append(box)
         },

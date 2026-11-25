@@ -115,6 +115,17 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
     let face: Face | null = null
     let cap: Cap | null = null
     let bow: Bow | null = null
+    let pendingFace: Face | null = null
+    let pendingCap: Cap | null = null
+    let pendingBow: Bow | null = null
+    let resolveSkyReady: (() => void) | null = null
+    const skyReady = new Promise<void>((resolve) => {
+        resolveSkyReady = resolve
+    })
+    const signalSkyReady = () => {
+        resolveSkyReady?.()
+        resolveSkyReady = null
+    }
     // The scene second the face's parts were all here, which it wakes from
     let faceFrom = Infinity
     const life = createFaceLife(seededRandom(4817), quietAt)
@@ -557,12 +568,22 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
             conductorOwner = null
         }
         world.release()
-        face?.release()
+        signalSkyReady()
+        const activeFace = face
+        const activeCap = cap
+        const activeBow = bow
         face = null
-        cap?.release()
         cap = null
-        bow?.release()
         bow = null
+        activeFace?.release()
+        if (pendingFace && pendingFace !== activeFace) pendingFace.release()
+        pendingFace = null
+        activeCap?.release()
+        if (pendingCap && pendingCap !== activeCap) pendingCap.release()
+        pendingCap = null
+        activeBow?.release()
+        if (pendingBow && pendingBow !== activeBow) pendingBow.release()
+        pendingBow = null
     }
 
     // If the GPU drops the context, fall back to the CSS sky underneath. A kept frame may be stale
@@ -576,35 +597,42 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
     }
     canvas.addEventListener("webglcontextlost", onContextLost)
 
-    // The face comes after the sky and takes over from the painted glass when all its parts are here, and the cap and the bow tie
-    // with it, so all wake together from rest. If the face can't, the conductor simply stays as painted, and if only the cap or the
-    // bow can't, so does that part
+    // Download face, cap and bow textures in parallel with the sky while gating face GPU compile, upload and DOM mount
+    // until after the sky renders its first live frame so the sky never stalls and early release cleans every pending part
+    let faceStarted = false
     const startFace = () => {
-        if (!faceSlot) return
+        if (faceStarted || !faceSlot || released) return
+        faceStarted = true
         const made = createFace(faceSlot)
         if (!made) return
         const madeCap = createCap(conductor)
         const mascot = conductor.querySelector<HTMLImageElement>("[data-mascot]")
         const madeBow = mascot ? createBow(conductor, mascot) : null
+        pendingFace = made
+        pendingCap = madeCap
+        pendingBow = madeBow
         const partHere = (madePart: Cap | Bow | null, name: string) =>
             madePart
-                ? madePart.load().then(
+                ? madePart.load(skyReady).then(
                       () => true,
                       (reason) => {
-                          if (!released) console.warn(`The conductor's ${name} stays as painted:`, reason)
+                          if (!disposed && !released) console.warn(`The conductor's ${name} stays as painted:`, reason)
                           madePart.release()
                           return false
                       },
                   )
                 : false
-        Promise.all([made.load(), partHere(madeCap, "cap"), partHere(madeBow, "bow tie")])
+        Promise.all([made.load(skyReady), partHere(madeCap, "cap"), partHere(madeBow, "bow tie")])
             .then(([, withCap, withBow]) => {
-                if (released) {
+                if (disposed || released || conductorOwner !== owner) {
                     made.release()
                     madeCap.release()
                     madeBow?.release()
                     return
                 }
+                pendingFace = null
+                pendingCap = null
+                pendingBow = null
                 faceSlot.append(made.canvas)
                 face = made
                 setHeroFaceMoving(owner, running)
@@ -616,12 +644,17 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
                 requestAnimationFrame(() => (made.canvas.dataset.on = ""))
             })
             .catch((reason) => {
-                if (!released) console.warn("The conductor's face stays as painted:", reason)
+                if (!disposed && !released) console.warn("The conductor's face stays as painted:", reason)
+                if (pendingFace === made) pendingFace = null
+                if (pendingCap === madeCap) pendingCap = null
+                if (pendingBow === madeBow) pendingBow = null
                 made.release()
                 madeCap.release()
                 madeBow?.release()
             })
     }
+
+    startFace()
 
     world
         .load()
@@ -633,25 +666,44 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
             loaded = true
             measurePage()
             setImmersive(true)
-            startFace()
             world.loadParts().catch((reason) => {
-                if (!released) console.warn("The sky's icons stay whole:", reason)
+                if (!disposed && !released) console.warn("The sky's icons stay whole:", reason)
             })
             tick(nowSeconds())
             start()
             hero.dataset.scene = "live"
+            window.dispatchEvent(new Event("fluxerly:hero-ready"))
+            // Let the first live sky frame paint before compiling face shaders and mounting live face layers
+            requestAnimationFrame(() => {
+                if (!disposed && !released && conductorOwner === owner) signalSkyReady()
+            })
             // Once the live sky covers the Still frame, the frame stops costing a layer. Leaving repaints it
             const frame = slot.querySelector<HTMLCanvasElement>("canvas[data-scene-frame]")
-            tweenTo("opacity", 1, 1.2, power2Out, () => {
+            tweenTo("opacity", 1, 0.45, power2Out, () => {
                 if (frame) hideFrame(frame)
             })
         })
-        .catch(() => release())
+        .catch(() => {
+            release()
+        })
 
     return {
         dispose() {
             if (disposed) return
             disposed = true
+            signalSkyReady()
+            if (pendingFace && pendingFace !== face) {
+                pendingFace.release()
+                pendingFace = null
+            }
+            if (pendingCap && pendingCap !== cap) {
+                pendingCap.release()
+                pendingCap = null
+            }
+            if (pendingBow && pendingBow !== bow) {
+                pendingBow.release()
+                pendingBow = null
+            }
             setImmersive(false)
             if (conductorOwner === owner) delete hero.dataset.scene
             if (!loaded) {

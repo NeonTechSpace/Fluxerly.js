@@ -1,9 +1,10 @@
 // Bundles the real @neontechspace/fluxerly SDK, createTestBot and Sucrase into one browser-ready runtime script
 // for the isolated playground iframe. Zero external CDNs, zero server functions and zero modifications to SDK source
 import { mkdir, readFile, writeFile } from "node:fs/promises"
-import { dirname, join, resolve } from "node:path"
+import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { build } from "esbuild"
+import { buildPlaygroundTsAssets } from "./playground-ts-assets.mjs"
 
 const webRoot = fileURLToPath(new URL("../", import.meta.url))
 const sdkRoot = resolve(webRoot, "../sdk")
@@ -74,18 +75,82 @@ export async function bundlePlaygroundRuntime({ minify = true } = {}) {
 }
 
 export default function playgroundRuntime() {
-    let cachedDevBundle = null
+    let cachedDevBundlePromise = null
+    let cachedDevTsAssetsPromise = null
+    const getDevBundle = () => {
+        cachedDevBundlePromise ??= bundlePlaygroundRuntime({ minify: false }).catch((error) => {
+            cachedDevBundlePromise = null
+            throw error
+        })
+        return cachedDevBundlePromise
+    }
+    const getDevTsAssets = () => {
+        cachedDevTsAssetsPromise ??= buildPlaygroundTsAssets({ minify: false }).catch((error) => {
+            cachedDevTsAssetsPromise = null
+            throw error
+        })
+        return cachedDevTsAssetsPromise
+    }
     return {
         name: "fluxerly-playground-runtime",
         hooks: {
             "astro:server:setup": ({ server }) => {
+                server.watcher.on("change", (changedFile) => {
+                    const normalized = changedFile.replaceAll("\\", "/")
+                    if (normalized.includes("/playground-runtime/") || normalized.includes("/sdk/dist/")) {
+                        cachedDevBundlePromise = null
+                    }
+                    if (
+                        normalized.includes("/playground-ts/") ||
+                        normalized.includes("/scripts/playground-ts-assets.mjs") ||
+                        normalized.includes("/sdk/dist/")
+                    ) {
+                        cachedDevTsAssetsPromise = null
+                    }
+                })
                 server.middlewares.use(async (req, res, next) => {
-                    if (req.url?.split("?")[0] !== "/playground/runtime.js") return next()
+                    const pathname = req.url?.split("?")[0]
+                    if (!pathname?.startsWith("/playground/")) return next()
                     try {
-                        cachedDevBundle ??= await bundlePlaygroundRuntime({ minify: false })
-                        res.setHeader("content-type", "text/javascript; charset=utf-8")
-                        res.setHeader("cache-control", "no-store")
-                        res.end(cachedDevBundle)
+                        if (pathname === "/playground/runtime.js") {
+                            const bundle = await getDevBundle()
+                            res.setHeader("content-type", "text/javascript; charset=utf-8")
+                            res.setHeader("cache-control", "no-store")
+                            res.end(bundle)
+                            return
+                        }
+                        if (
+                            pathname === "/playground/ts-manifest.json" ||
+                            pathname.startsWith("/playground/ts-") ||
+                            pathname.startsWith("/playground/types-")
+                        ) {
+                            const tsAssets = await getDevTsAssets()
+                            if (pathname === "/playground/ts-manifest.json") {
+                                res.setHeader("content-type", "application/json; charset=utf-8")
+                                res.setHeader("cache-control", "no-store")
+                                res.end(tsAssets.manifestJson)
+                                return
+                            }
+                            if (pathname === tsAssets.manifest.workerUrl) {
+                                res.setHeader("content-type", "text/javascript; charset=utf-8")
+                                res.setHeader("cache-control", "no-store")
+                                res.end(tsAssets.workerCode)
+                                return
+                            }
+                            if (pathname === tsAssets.manifest.coreTypesUrl) {
+                                res.setHeader("content-type", "application/json; charset=utf-8")
+                                res.setHeader("cache-control", "no-store")
+                                res.end(tsAssets.coreJson)
+                                return
+                            }
+                            if (pathname === tsAssets.manifest.effectTypesUrl) {
+                                res.setHeader("content-type", "application/json; charset=utf-8")
+                                res.setHeader("cache-control", "no-store")
+                                res.end(tsAssets.effectJson)
+                                return
+                            }
+                        }
+                        return next()
                     } catch (error) {
                         next(error)
                     }
@@ -94,10 +159,19 @@ export default function playgroundRuntime() {
             "astro:build:done": async ({ dir }) => {
                 // Versioned docs-only builds under /docs/<version>/ do not serve /playground/
                 if (process.env.PUBLIC_DOCS_BASE) return
-                const code = await bundlePlaygroundRuntime({ minify: true })
-                const outFile = join(fileURLToPath(dir), "playground/runtime.js")
-                await mkdir(dirname(outFile), { recursive: true })
-                await writeFile(outFile, code, "utf8")
+                const outDir = join(fileURLToPath(dir), "playground")
+                const [code, tsAssets] = await Promise.all([
+                    bundlePlaygroundRuntime({ minify: true }),
+                    buildPlaygroundTsAssets({ minify: true }),
+                ])
+                await mkdir(outDir, { recursive: true })
+                await Promise.all([
+                    writeFile(join(outDir, "runtime.js"), code, "utf8"),
+                    writeFile(join(outDir, "ts-manifest.json"), tsAssets.manifestJson, "utf8"),
+                    writeFile(join(outDir, tsAssets.workerFile), tsAssets.workerCode, "utf8"),
+                    writeFile(join(outDir, tsAssets.coreFile), tsAssets.coreJson, "utf8"),
+                    writeFile(join(outDir, tsAssets.effectFile), tsAssets.effectJson, "utf8"),
+                ])
             },
         },
     }

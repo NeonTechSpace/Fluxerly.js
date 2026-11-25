@@ -26,8 +26,8 @@ export interface FaceFrame {
 
 export interface Face {
     readonly canvas: HTMLCanvasElement
-    // Loads the parts and builds the program without holding the page up
-    load(): Promise<void>
+    // Loads the parts and builds the program without holding the page up; optional gate waits before GPU compile and upload
+    load(readyToUpload?: Promise<void>): Promise<void>
     resize(): void
     render(frame: FaceFrame): void
     release(): void
@@ -74,9 +74,11 @@ export function createFace(slot: HTMLElement): Face | null {
     const timeUniform = { value: 0 }
     const wakeUniform = { value: 0 }
     const glowUniform = { value: 0 }
+    const blinkUniform = { value: 0 }
     const uniforms: Record<string, { value: unknown }> = {
         uTime: timeUniform,
         uWake: wakeUniform,
+        uBlink: blinkUniform,
         uEye: { value: eyeUniforms },
         uBrow: { value: browUniforms },
         uCheek: { value: cheekUniforms },
@@ -110,10 +112,11 @@ export function createFace(slot: HTMLElement): Face | null {
     return {
         canvas,
         resize,
-        async load() {
+        async load(readyToUpload) {
             const loader = new TextureLoader()
             const parts = Object.entries(faceArt.parts) as [FacePartName, { src: string }][]
             const loaded = await Promise.all(parts.map(([, part]) => loader.loadAsync(part.src)))
+            if (readyToUpload) await readyToUpload
             if (released) {
                 for (const texture of loaded) texture.dispose()
                 throw new Error("released")
@@ -143,6 +146,7 @@ export function createFace(slot: HTMLElement): Face | null {
             const { time, wake, state, glow, charge, chargeLevel, viewX, viewY } = frame
             timeUniform.value = time
             wakeUniform.value = wake
+            blinkUniform.value = state.blink
             const eye0 = state.eyes[0]
             const eye1 = state.eyes[1]
             eyeUniforms[0]!.set(eye0.x, eye0.y, eye0.scaleX, eye0.scaleY)

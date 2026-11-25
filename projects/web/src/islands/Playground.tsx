@@ -24,7 +24,8 @@ import type {
     SandboxTelemetry,
     SandboxToParentMessage,
 } from "../playground-runtime/protocol"
-import CodeEditor from "./CodeEditor"
+import CodeEditor, { type CodeEditorJumpTarget } from "./CodeEditor"
+import type { TsDiagnostic } from "../playground-ts/protocol"
 import { getPreset, playgroundPresets, type PlaygroundPreset } from "./playground-presets"
 import "./playground.css"
 
@@ -294,6 +295,10 @@ export default function Playground() {
     const [telemetry, setTelemetry] = useState<SandboxTelemetry>(emptyTelemetry)
     const [shareStatus, setShareStatus] = useState<"idle" | "copied" | "ready" | "too-large">("idle")
     const shareTimerRef = useRef<number | undefined>(undefined)
+    const [tsDiagnostics, setTsDiagnostics] = useState<readonly TsDiagnostic[]>([])
+    const [jumpTarget, setJumpTarget] = useState<CodeEditorJumpTarget | null>(null)
+    const jumpDiagIndexRef = useRef(0)
+    const jumpSeqRef = useRef(1)
 
     const iframeRef = useRef<HTMLIFrameElement>(null)
     const runSeqRef = useRef(0)
@@ -845,6 +850,23 @@ export default function Playground() {
                             <TerminalWindowIcon size={18} weight="duotone" className="pg-file-icon" aria-hidden="true" />
                             <span className="pg-file-name">{activePreset.filename}</span>
                             {sdkVersion && <span className="pg-sdk-tag">v{sdkVersion}</span>}
+                            {tsDiagnostics.length > 0 && (
+                                <button
+                                    type="button"
+                                    className="pg-diag-pill"
+                                    onClick={() => {
+                                        const nextIndex = jumpDiagIndexRef.current % tsDiagnostics.length
+                                        jumpDiagIndexRef.current = nextIndex + 1
+                                        setJumpTarget({ offset: tsDiagnostics[nextIndex]!.from, seq: jumpSeqRef.current++ })
+                                    }}
+                                    aria-label={`Jump to TypeScript diagnostic (${tsDiagnostics.length} found)`}
+                                >
+                                    <WarningCircleIcon size={14} weight="fill" aria-hidden="true" />
+                                    <span>
+                                        {tsDiagnostics.length} {tsDiagnostics.length === 1 ? "issue" : "issues"}
+                                    </span>
+                                </button>
+                            )}
                         </div>
                         <div className="pg-editor-controls">
                             <label className="pg-autorun">
@@ -856,7 +878,17 @@ export default function Playground() {
                     </header>
 
                     <div className="pg-editor-body">
-                        <CodeEditor value={code} onChange={setCode} onRunShortcut={() => triggerRun()} />
+                        <CodeEditor
+                            value={code}
+                            filename={activePreset.filename}
+                            onChange={setCode}
+                            onRunShortcut={() => triggerRun()}
+                            onDiagnosticsChange={(next) => {
+                                jumpDiagIndexRef.current = 0
+                                setTsDiagnostics(next)
+                            }}
+                            jumpToOffset={jumpTarget}
+                        />
                     </div>
 
                     {(bootError || runError) && (

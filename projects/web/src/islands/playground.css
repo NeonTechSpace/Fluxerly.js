@@ -791,6 +791,158 @@
     font-size: var(--type-small);
 }
 
+/* TypeScript 6.0 Web Worker IntelliSense: wavy squiggles, hover info and completion docs */
+.pg-diag-pill {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 28px;
+    padding: 0 9px;
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    font-weight: var(--weight-semibold);
+    color: #ff8f9c;
+    background: rgb(226 80 95 / 0.16);
+    border: 1px solid rgb(226 80 95 / 0.45);
+    border-radius: var(--corner-round);
+    cursor: pointer;
+    transition:
+        background-color var(--speed-fast) ease,
+        border-color var(--speed-fast) ease;
+}
+
+.pg-diag-pill::after {
+    content: "";
+    position: absolute;
+    inset: -8px -4px;
+}
+
+.pg-diag-pill:hover {
+    background: rgb(226 80 95 / 0.26);
+    border-color: #e2505f;
+}
+
+.cm-ts-error {
+    text-decoration-line: underline;
+    text-decoration-style: wavy;
+    text-decoration-color: #e2505f;
+    text-underline-offset: 2px;
+}
+
+.cm-ts-warning {
+    text-decoration-line: underline;
+    text-decoration-style: wavy;
+    text-decoration-color: #ecc46e;
+    text-underline-offset: 2px;
+}
+
+.pg-ts-hover,
+.pg-ts-doc {
+    display: grid;
+    gap: 6px;
+    max-width: min(460px, 84vw);
+    padding: 8px 10px;
+    font-family: var(--font-sans);
+    font-size: var(--type-small);
+    line-height: 1.45;
+    color: var(--color-ink);
+}
+
+.pg-ts-hover .pg-ts-doc {
+    padding: 0;
+}
+
+.pg-ts-sig {
+    margin: 0;
+    padding: 6px 8px;
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    line-height: 1.45;
+    color: var(--color-cyan-pale);
+    background: rgb(4 5 26 / 0.7);
+    border: 1px solid rgb(160 190 255 / 0.18);
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.pg-ts-text {
+    margin: 0;
+    font-size: var(--type-micro);
+    color: var(--color-muted);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.pg-ts-tags {
+    display: grid;
+    gap: 3px;
+}
+
+.pg-ts-tag {
+    display: flex;
+    gap: 6px;
+    font-size: var(--type-micro);
+}
+
+.pg-ts-tag-name {
+    flex: none;
+    font-family: var(--font-mono);
+    font-weight: var(--weight-semibold);
+    color: var(--color-violet-light);
+}
+
+.pg-ts-tag-body {
+    color: var(--color-muted);
+    overflow-wrap: anywhere;
+}
+
+.pg-ts-diag {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    padding: 6px 8px;
+    font-size: var(--type-micro);
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+}
+
+.pg-ts-diag-error {
+    color: #ff8f9c;
+    background: rgb(226 80 95 / 0.16);
+    border: 1px solid rgb(226 80 95 / 0.4);
+}
+
+.pg-ts-diag-warn {
+    color: #ecc46e;
+    background: rgb(236 196 110 / 0.14);
+    border: 1px solid rgb(236 196 110 / 0.36);
+}
+
+.pg-ts-diag-code {
+    flex: none;
+    font-family: var(--font-mono);
+    font-weight: var(--weight-semibold);
+}
+
+.pg-ts-diag-msg {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.cm-tooltip.cm-completionInfo {
+    padding: 0;
+    max-width: min(420px, 78vw);
+    max-height: 260px;
+    overflow-y: auto;
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+}
+
 /* Still mode disables all transitions */
 .pg[data-still] *,
 html[data-still] .pg * {

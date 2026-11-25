@@ -720,10 +720,24 @@ const bubbles = columns.map((x, index) => ({
         90%,
         100% {
             transform: none;
+            clip-path: inset(0% 0% 0% 0% round 0%);
+            opacity: 1;
         }
-        92%,
+        91.5% {
+            transform: translate3d(0, 2%, 0) scale(1.03, 0.82);
+            clip-path: inset(42% 0% 12% 0% round 45%);
+            opacity: 0.72;
+        }
+        92.2%,
         93% {
-            transform: scaleY(0.07);
+            transform: translate3d(0, 4%, 0) scale(1.05, 0.74);
+            clip-path: inset(66% 0% 26% 0% round 50%);
+            opacity: 0;
+        }
+        95% {
+            transform: translate3d(0, 1.5%, 0) scale(1.02, 0.86);
+            clip-path: inset(30% 0% 8% 0% round 40%);
+            opacity: 0.82;
         }
     }
 
