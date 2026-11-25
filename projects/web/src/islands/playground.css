@@ -17,6 +17,10 @@
     opacity: 0;
 }
 
+.pg-toolbar.glass {
+    background: var(--glass-fill) var(--color-night);
+}
+
 .pg-toolbar {
     display: flex;
     flex-wrap: wrap;
@@ -202,6 +206,10 @@
     grid-template-columns: minmax(0, 0.94fr) minmax(0, 1.06fr);
     gap: 12px;
     align-items: start;
+}
+
+.pg-pane.glass {
+    background: var(--glass-fill) var(--color-night);
 }
 
 .pg-pane {
