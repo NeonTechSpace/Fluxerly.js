@@ -14,6 +14,7 @@ import {
     triageAgents,
     type TriageSpawnRequest,
 } from "../../src/internal/triage-command.js"
+import { pinnedFluxerCommit, pinnedFluxerRepository } from "../../src/internal/fluxer-pin.js"
 
 const sdkRoot = fileURLToPath(new URL("../../", import.meta.url))
 const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url))
@@ -58,11 +59,15 @@ function makeBotProject(options: { envSecret?: string } = {}): string {
     )
     writeFileSync(join(project, ".gitignore"), "node_modules\n.env\n")
     if (options.envSecret !== undefined) writeFileSync(join(project, ".env"), `FLUXER_BOT_TOKEN=${options.envSecret}\n`)
-    mkdirSync(join(project, "node_modules/@neontechspace/fluxerly/src"), { recursive: true })
+    mkdirSync(join(project, "node_modules/@neontechspace/fluxerly/src/internal"), { recursive: true })
     mkdirSync(join(project, "node_modules/@neontechspace/fluxerly/agents"), { recursive: true })
     writeFileSync(
         join(project, "node_modules/@neontechspace/fluxerly/package.json"),
         JSON.stringify({ name: "@neontechspace/fluxerly", version: "1003.0.0" }),
+    )
+    writeFileSync(
+        join(project, "node_modules/@neontechspace/fluxerly/src/internal/fluxer-pin.ts"),
+        `export const pinnedFluxerCommit = "${pinnedFluxerCommit}" as const\n`,
     )
     writeFileSync(join(project, "node_modules/@neontechspace/fluxerly/agents/AGENTS.md"), "# Fluxerly\n")
     mkdirSync(join(project, "node_modules/effect"), { recursive: true })
@@ -78,12 +83,18 @@ afterEach(() => {
 })
 
 describe("fluxerly triage playbook, argument parsing and helpers", () => {
-    test("bundled agents/TRIAGE.md stays byte-for-byte identical to .github/triage/PLAYBOOK.md", () => {
+    test("bundled agents/TRIAGE.md stays byte-for-byte identical to .github/triage/PLAYBOOK.md and fluxer-pin matches manifest", () => {
         const bundled = readFileSync(join(sdkRoot, "agents/TRIAGE.md"), "utf8")
         const repoCopy = readFileSync(join(repoRoot, ".github/triage/PLAYBOOK.md"), "utf8")
         expect(bundled).toBe(repoCopy)
         expect(bundled).toContain("via-triage.yml")
         expect(bundled).toContain("createTestBot")
+        expect(bundled).toContain("--run")
+        const manifest = JSON.parse(
+            readFileSync(join(repoRoot, "projects/release/upstream/manifest.json"), "utf8"),
+        ) as { repository: string; commit: string }
+        expect(pinnedFluxerRepository).toBe(manifest.repository)
+        expect(pinnedFluxerCommit).toBe(manifest.commit)
     })
 
     test("parses triage options, redacts home paths, resolves agent answers and handles empty PATH", () => {
@@ -97,6 +108,8 @@ describe("fluxerly triage playbook, argument parsing and helpers", () => {
                 "bot",
                 "--log",
                 "bot.log",
+                "--run",
+                "node bot.js",
                 "bot hangs on shutdown",
             ]),
         ).toEqual({
@@ -106,6 +119,7 @@ describe("fluxerly triage playbook, argument parsing and helpers", () => {
                 model: "gemini-4",
                 dir: "bot",
                 log: "bot.log",
+                run: "node bot.js",
                 problem: "bot hangs on shutdown",
                 print: false,
             },
@@ -117,6 +131,7 @@ describe("fluxerly triage playbook, argument parsing and helpers", () => {
                 model: undefined,
                 dir: "bot",
                 log: undefined,
+                run: undefined,
                 problem: undefined,
                 print: true,
             },
@@ -126,6 +141,9 @@ describe("fluxerly triage playbook, argument parsing and helpers", () => {
             ["--print", "--agent", "codex"],
             ["--model"],
             ["--log"],
+            ["--run"],
+            ["--run", "   "],
+            ["--run", "a", "--run", "b"],
             ["--bogus"],
         ]) {
             expect(parseTriageArguments(bad).ok).toBe(false)
@@ -168,6 +186,7 @@ describe("fluxerly triage execution modes", () => {
         // oxlint-disable-next-line no-control-regex -- Verifies --print contains zero ANSI escapes
         expect(printed).not.toMatch(/\x1b\[/)
         expect(printed).toContain("Installed @neontechspace/fluxerly version: 1003.0.0")
+        expect(printed).toContain(`Target Fluxer server commit (installed SDK): ${pinnedFluxerCommit}`)
         expect(printed).toContain("gateway closes with 4004")
         expect(printed).toContain("~/my-bot/bot.ts")
         expect(printed).not.toContain(secret)
@@ -306,5 +325,78 @@ describe("fluxerly triage execution modes", () => {
         ).toBe(1)
         expect(failOut.read()).toContain("~/.custom-codex")
         expect(failOut.read()).toContain("CODEX_HOME")
+    })
+
+    test("--run executes the command with FLUXERLY_DEBUG, masks secrets, writes triage-trace.log and survives non-zero exit", async () => {
+        const project = makeBotProject()
+        const sessions = makeTempDir("fluxerly-triage-run-")
+        const out = captureStream()
+        const err = captureStream()
+        const traceOut = captureStream()
+
+        // --print --run with real node child process verifying FLUXERLY_DEBUG, non-zero exit and secret redaction
+        const scriptCmd = `${JSON.stringify(process.execPath)} -e "console.log('DEBUG=' + process.env.FLUXERLY_DEBUG); console.error('Authorization: Bot trace-secret-99999'); console.error('Path: /home/alice/bot/index.js'); process.exit(2)"`
+        expect(
+            await runTriage(["--print", "--run", scriptCmd], {
+                project,
+                packageRoot: sdkRoot,
+                input: new PassThrough(),
+                output: out.stream,
+                errorOutput: err.stream,
+                env: {},
+                platform: "linux",
+                homedir: "/home/alice",
+                traceTimeoutMs: 10_000,
+            }),
+        ).toBe(0)
+        expect(err.read()).toBe("")
+        const printed = out.read()
+        expect(printed).toContain("## Redacted debug trace (--run)")
+        expect(printed).toContain("Outcome: exit 2")
+        expect(printed).toContain("DEBUG=rest,gateway")
+        expect(printed).toContain("~/bot/index.js")
+        expect(printed).not.toContain("trace-secret-99999")
+
+        // Interactive session writes scrubbed triage-trace.log alongside triage-context.md
+        const calls: TriageSpawnRequest[] = []
+        expect(
+            await runTriage(["--run", "node bot.js"], {
+                project,
+                packageRoot: sdkRoot,
+                input: new PassThrough(),
+                output: traceOut.stream,
+                errorOutput: captureStream().stream,
+                env: {},
+                platform: "linux",
+                homedir: "/home/alice",
+                sessionRoot: sessions,
+                detectCommand: (cmd) => (cmd === "codex" ? "/usr/bin/codex" : undefined),
+                spawnSession: async (request) => {
+                    calls.push(request)
+                    return 0
+                },
+                runTraceCommand: async (command) => ({
+                    command,
+                    exitCode: 1,
+                    signal: null,
+                    timedOut: false,
+                    output: "Authorization: Bearer secret-oauth-xyz\n/home/alice/project/bot.ts:12\n",
+                    truncated: false,
+                }),
+            }),
+        ).toBe(0)
+        expect(calls).toHaveLength(1)
+        const promptPath = calls[0]!.args[0]!.match(/(\S+triage-prompt\.md)/)?.[1] ?? ""
+        expect(promptPath).not.toBe("")
+        const contextPath = promptPath.replace("triage-prompt.md", "triage-context.md")
+        const tracePath = promptPath.replace("triage-prompt.md", "triage-trace.log")
+        expect(existsSync(tracePath)).toBe(true)
+        const traceFile = readFileSync(tracePath, "utf8")
+        expect(traceFile).not.toContain("secret-oauth-xyz")
+        expect(traceFile).toContain("~/project/bot.ts:12")
+        const contextFile = readFileSync(contextPath, "utf8")
+        expect(contextFile).toContain("triage-trace.log")
+        expect(contextFile).toContain("Outcome: exit 1")
+        expect(contextFile).not.toContain("secret-oauth-xyz")
     })
 })

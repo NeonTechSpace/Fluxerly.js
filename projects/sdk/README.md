@@ -3,6 +3,7 @@
 Fluxerly.js (FluxerlyJS) is a Fluxer-native bot SDK for JavaScript, TypeScript and Effect on Node.js 26.13 or newer (ESM only, TypeScript 7 for type checking)
 
 [Home](https://fluxerly.neontechspace.com/) ·
+[Playground](https://fluxerly.neontechspace.com/playground/) ·
 [Docs](https://fluxerly.neontechspace.com/docs/) ·
 [Quick start](https://fluxerly.neontechspace.com/docs/quick-start/) ·
 [API reference](https://fluxerly.neontechspace.com/docs/api/) ·
@@ -34,6 +35,7 @@ Fluxerly is built for developers at every skill level, from a first bot in one f
 - **Complete Fluxer coverage:** Messages, embeds, attachments, voice notes, reactions, threads and forum posts, communities, roles and permissions, emoji and stickers, webhooks and OAuth2, with paginated history and opt-in bounded caches
 - **Typed raw escape hatches:** The `client.rest.call` method reaches every bot route with Fluxer's own field names checked at compile time, `client.rest.request` reaches routes newer than the SDK, and raw gateway events carry their documented payload types
 - **Zero-network testing:** The `/testing` and `/effect/testing` entry points ship `createTestBot` with an in-memory Fluxer gateway, HTTP server and virtual test clock so timed work runs without waiting
+- **Zero-backend browser SDK sandbox:** Try real `@neontechspace/fluxerly` TypeScript, JavaScript and Effect bots live in an isolated browser iframe on `createTestBot` with 429/403 fault injection and wire inspection at [fluxerly.neontechspace.com/playground](https://fluxerly.neontechspace.com/playground/)
 - **Two APIs, one engine:** Start with async/await and Results, or choose the native Effect 4 API with typed error channels, scopes and layers, backed by the same implementation
 - **Production resilience:** Automatic sharding, session resume across restarts, a process supervisor, deadline-aware rate limiting that never blindly replays uncertain writes, and metrics and traces through `observe`
 - **Built-in CLI, diagnostics and agent workflow:** Shipped TypeScript `src/` and source maps, `fluxerly doctor` for offline setup and `node_modules` drift checks, `fluxerly triage` for agent-powered root-cause debugging against shipped source with `createTestBot` reproductions, `fluxerly agents` for `AGENTS.md`, `SKILL.md`, Cursor, Claude and Gemini rules, `fluxerly invite` for offline install URLs, plus [SKILL.md](https://fluxerly.neontechspace.com/SKILL.md) and [llms.txt](https://fluxerly.neontechspace.com/llms.txt)

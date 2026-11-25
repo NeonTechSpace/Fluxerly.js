@@ -8,6 +8,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { checkAgentsSection, localAgentsCommand } from "./agents-section.js"
 import { createCliTheme, type CliStreamLike } from "./cli-theme.js"
+import { pinnedFluxerCommit } from "./fluxer-pin.js"
 
 export type DoctorStatus = "pass" | "warn" | "fail"
 
@@ -25,7 +26,9 @@ export interface DoctorReport {
 
 export interface ProjectFacts {
     readonly cliVersion: string | undefined
+    readonly cliFluxerCommit: string
     readonly installedSdkVersion: string | undefined
+    readonly installedSdkFluxerCommit: string | undefined
     readonly installedSdkPath: string | undefined
     readonly installedSdkSourcePath: string | undefined
     readonly installedAgentsGuidePath: string | undefined
@@ -563,6 +566,23 @@ export function inspectProject(
     return { ok: checks.every((check) => check.status !== "fail"), checks }
 }
 
+function readInstalledFluxerCommit(sdkDir: string): string | undefined {
+    for (const candidate of [
+        join(sdkDir, "src", "internal", "fluxer-pin.ts"),
+        join(sdkDir, "dist", "internal", "fluxer-pin.js"),
+    ]) {
+        if (!existsSync(candidate)) continue
+        try {
+            const text = readFileSync(candidate, "utf8")
+            const match = /\bpinnedFluxerCommit\s*=\s*["']([a-f0-9]{40})["']/.exec(text)
+            if (match?.[1]) return match[1]
+        } catch {
+            // allow-silent: Fall back to undefined when installed pin metadata cannot be read
+        }
+    }
+    return undefined
+}
+
 /** Collect redacted static project facts and doctor findings for offline checks and `fluxerly triage` */
 export function collectProjectFacts(
     project: string,
@@ -576,12 +596,15 @@ export function collectProjectFacts(
     const installedSdkVersion = installedSdkExists
         ? installedPackageVersion(project, "@neontechspace/fluxerly")
         : undefined
+    const installedSdkFluxerCommit = installedSdkExists ? readInstalledFluxerCommit(installedSdkDir) : undefined
     const sdkRoot = installedSdkExists ? installedSdkDir : packageRoot
     const sourcePath = join(sdkRoot, "src")
     const agentsPath = join(sdkRoot, "agents", "AGENTS.md")
     return {
         cliVersion,
+        cliFluxerCommit: pinnedFluxerCommit,
         installedSdkVersion,
+        installedSdkFluxerCommit,
         installedSdkPath: installedSdkExists ? installedSdkDir : undefined,
         installedSdkSourcePath: existsSync(sourcePath) ? sourcePath : undefined,
         installedAgentsGuidePath: existsSync(agentsPath) ? agentsPath : undefined,

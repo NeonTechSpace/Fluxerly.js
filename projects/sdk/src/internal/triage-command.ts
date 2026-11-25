@@ -63,14 +63,26 @@ export interface TriageOptions {
     readonly model?: string | undefined
     readonly dir?: string | undefined
     readonly log?: string | undefined
+    readonly run?: string | undefined
     readonly problem?: string | undefined
     readonly print: boolean
+}
+
+export interface TriageTraceResult {
+    readonly command: string
+    readonly exitCode: number | null
+    readonly signal: NodeJS.Signals | null
+    readonly timedOut: boolean
+    readonly output: string
+    readonly truncated: boolean
+    readonly errorMessage?: string | undefined
 }
 
 interface TriageSessionFiles {
     readonly sessionDir: string
     readonly promptFilePath: string
     readonly contextFilePath: string
+    readonly traceFilePath?: string | undefined
 }
 
 export interface TriageSpawnRequest {
@@ -93,8 +105,17 @@ export interface TriageEnvironment {
     readonly osArch?: string
     readonly homedir?: string
     readonly sessionRoot?: string
+    readonly traceTimeoutMs?: number
     readonly detectCommand?: (command: string) => string | undefined
     readonly spawnSession?: (request: TriageSpawnRequest) => Promise<number>
+    readonly runTraceCommand?: (
+        command: string,
+        options: {
+            readonly cwd: string
+            readonly env: Readonly<Record<string, string | undefined>>
+            readonly timeoutMs: number
+        },
+    ) => Promise<TriageTraceResult>
 }
 
 const agentIds = new Set<string>(triageAgents.map((agent) => agent.id))
@@ -107,6 +128,7 @@ export function parseTriageArguments(
     let model: string | undefined
     let dir: string | undefined
     let log: string | undefined
+    let run: string | undefined
     const problemParts: string[] = []
     let print = false
     let afterSeparator = false
@@ -154,6 +176,12 @@ export function parseTriageArguments(
             if (!value || value.startsWith("-"))
                 return { ok: false, message: "The --log option requires a log file path" }
             log = value
+        } else if (arg === "--run") {
+            if (run !== undefined) return { ok: false, message: "The --run option was passed more than once" }
+            const value = args[++index]
+            if (!value || !value.trim())
+                return { ok: false, message: "The --run option requires a command string to execute" }
+            run = value.trim()
         } else if (arg.startsWith("-")) {
             return { ok: false, message: `Unknown argument "${arg}" for triage` }
         } else {
@@ -166,7 +194,7 @@ export function parseTriageArguments(
 
     const joinedProblem = problemParts.join(" ").trim()
     const problem = joinedProblem.length > 0 ? joinedProblem : undefined
-    return { ok: true, options: { agent, model, dir, log, problem, print } }
+    return { ok: true, options: { agent, model, dir, log, run, problem, print } }
 }
 
 /** Replace the user's home directory prefix with `~` so triage context never leaks usernames */
@@ -193,6 +221,8 @@ function readBundledPlaybook(packageRoot: string): string {
 }
 
 const maxLogExcerptChars = 16_000
+const maxTraceCaptureChars = 256_000
+const defaultTraceTimeoutMs = 30_000
 const sensitiveLogFilePattern =
     /^(?:\.env(?:\..+)?|.*\.pem|.*\.key|.*\.p12|.*\.pfx|id_rsa(?:\.pub)?|id_ed25519(?:\.pub)?|credentials(?:\..+)?|secrets?(?:\..+)?)$/i
 
@@ -234,6 +264,65 @@ function readRedactedLogTail(
     return { ok: true, excerpt: redactInlineText(slice, home).trimEnd(), truncated }
 }
 
+function defaultRunTraceCommand(
+    command: string,
+    options: {
+        readonly cwd: string
+        readonly env: Readonly<Record<string, string | undefined>>
+        readonly timeoutMs: number
+    },
+): Promise<TriageTraceResult> {
+    return new Promise((resolveTrace) => {
+        const debugValue = options.env.FLUXERLY_DEBUG?.trim() || "rest,gateway"
+        const child = spawn(command, {
+            cwd: options.cwd,
+            env: { ...options.env, FLUXERLY_DEBUG: debugValue },
+            shell: true,
+            stdio: ["ignore", "pipe", "pipe"],
+        })
+        let buffer = ""
+        let truncated = false
+        let timedOut = false
+        let settled = false
+        const append = (chunk: Buffer) => {
+            buffer += chunk.toString("utf8")
+            if (buffer.length > maxTraceCaptureChars) {
+                buffer = buffer.slice(buffer.length - maxTraceCaptureChars)
+                truncated = true
+            }
+        }
+        child.stdout?.on("data", append)
+        child.stderr?.on("data", append)
+        const timer = setTimeout(() => {
+            timedOut = true
+            child.kill("SIGTERM")
+            const killTimer = setTimeout(() => child.kill("SIGKILL"), 2_000)
+            killTimer.unref()
+        }, options.timeoutMs)
+        timer.unref()
+        const finish = (
+            exitCode: number | null,
+            signal: NodeJS.Signals | null,
+            errorMessage?: string,
+        ) => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            resolveTrace({
+                command,
+                exitCode,
+                signal,
+                timedOut,
+                output: buffer,
+                truncated,
+                errorMessage,
+            })
+        }
+        child.once("error", (error) => finish(null, null, maskedMessage(error) || "Failed to execute command"))
+        child.once("close", (code, signal) => finish(code, signal))
+    })
+}
+
 /** Render redacted machine, SDK and static doctor facts as Markdown for `triage-context.md` */
 function formatTriageContext(
     facts: ProjectFacts,
@@ -247,11 +336,23 @@ function formatTriageContext(
         readonly generatedAt: string
         readonly problem?: string | undefined
         readonly logExcerpt?:
-            { readonly path: string; readonly excerpt: string; readonly truncated: boolean } | undefined
+            | { readonly path: string; readonly excerpt: string; readonly truncated: boolean }
+            | undefined
+        readonly trace?:
+            | {
+                  readonly result: TriageTraceResult
+                  readonly redactedOutput: string
+                  readonly traceFilePath?: string | undefined
+              }
+            | undefined
     },
 ): string {
     const redact = (value: string) => redactHomePath(value, options.homedir)
     const statusLabels: Record<DoctorStatus, string> = { pass: "OK", warn: "WARN", fail: "FAIL" }
+    const installedPin = facts.installedSdkFluxerCommit
+        ? `${facts.installedSdkFluxerCommit} (${facts.installedSdkFluxerCommit.slice(0, 7)})`
+        : "unknown (older SDK release or not installed)"
+    const cliPin = `${facts.cliFluxerCommit} (${facts.cliFluxerCommit.slice(0, 7)})`
     const lines = [
         "# Fluxerly triage context",
         "",
@@ -265,7 +366,9 @@ function formatTriageContext(
         `- Package manager: ${facts.packageManager}`,
         `- Project folder: ${redact(options.project)}`,
         `- Triage CLI version: ${facts.cliVersion ?? "unknown"}`,
+        `- Target Fluxer server commit (triage CLI): ${cliPin}`,
         `- Installed @neontechspace/fluxerly version: ${facts.installedSdkVersion ?? "not installed in node_modules"}`,
+        `- Target Fluxer server commit (installed SDK): ${installedPin}`,
         `- Installed effect version: ${facts.installedEffectVersion ?? "not installed in node_modules"}`,
         `- Installed typescript version: ${facts.installedTypeScriptVersion ?? "not installed in node_modules"}`,
         `- Installed @types/node version: ${facts.installedTypesNodeVersion ?? "not installed in node_modules"}`,
@@ -296,6 +399,41 @@ function formatTriageContext(
             : `Redacted contents of ${redact(options.logExcerpt.path)}:`
         lines.push("", "## Redacted log excerpt", "", heading, "", "```text", options.logExcerpt.excerpt, "```")
     }
+    if (options.trace) {
+        const { result, redactedOutput, traceFilePath } = options.trace
+        const excerptTruncated = redactedOutput.length > maxLogExcerptChars || result.truncated
+        const excerpt =
+            redactedOutput.length > maxLogExcerptChars
+                ? redactedOutput.slice(redactedOutput.length - maxLogExcerptChars)
+                : redactedOutput
+        const statusSummary = result.errorMessage
+            ? `failed to start (${redactInlineText(result.errorMessage, options.homedir)})`
+            : result.timedOut
+              ? `timed out (exit ${result.exitCode ?? "null"}, signal ${result.signal ?? "none"})`
+              : `exit ${result.exitCode ?? "null"}${result.signal ? ` (signal ${result.signal})` : ""}`
+        lines.push(
+            "",
+            "## Redacted debug trace (--run)",
+            "",
+            `- Command: \`${redactInlineText(result.command, options.homedir)}\``,
+            `- Outcome: ${statusSummary}`,
+        )
+        if (traceFilePath) lines.push(`- Full redacted trace file: ${redact(traceFilePath)}`)
+        if (excerpt.trim().length > 0) {
+            lines.push(
+                "",
+                excerptTruncated
+                    ? `Redacted trace tail (last ${maxLogExcerptChars} characters):`
+                    : "Redacted trace output:",
+                "",
+                "```text",
+                excerpt.trimEnd(),
+                "```",
+            )
+        } else {
+            lines.push("", "Command produced no stdout or stderr output")
+        }
+    }
     return `${lines.join("\n")}\n`
 }
 
@@ -306,7 +444,7 @@ export function buildTriageLaunchPrompt(promptFilePath: string, hasProblem = fal
         : `Read and follow ${promptFilePath}, then read the sibling triage-context.md file and ask what went wrong`
 }
 
-/** Write `triage-context.md` and `triage-prompt.md` into a fresh temporary session folder */
+/** Write `triage-context.md`, `triage-prompt.md` and optional `triage-trace.log` into a fresh temporary session folder */
 function writeTriageSession(options: {
     readonly packageRoot: string
     readonly project: string
@@ -319,6 +457,7 @@ function writeTriageSession(options: {
     readonly sessionRoot?: string | undefined
     readonly problem?: string | undefined
     readonly logExcerpt?: { readonly path: string; readonly excerpt: string; readonly truncated: boolean } | undefined
+    readonly trace?: { readonly result: TriageTraceResult; readonly redactedOutput: string } | undefined
 }): TriageSessionFiles {
     const root = options.sessionRoot ?? tmpdir()
     mkdirSync(root, { recursive: true })
@@ -327,6 +466,11 @@ function writeTriageSession(options: {
 
     const contextFilePath = join(sessionDir, "triage-context.md")
     const promptFilePath = join(sessionDir, "triage-prompt.md")
+    let traceFilePath: string | undefined
+    if (options.trace) {
+        traceFilePath = join(sessionDir, "triage-trace.log")
+        writeFileSync(traceFilePath, `${options.trace.redactedOutput.trimEnd()}\n`, { encoding: "utf8", mode: 0o600 })
+    }
     const context = formatTriageContext(options.facts, {
         project: options.project,
         nodeVersion: options.nodeVersion,
@@ -337,13 +481,14 @@ function writeTriageSession(options: {
         generatedAt: new Date().toISOString(),
         problem: options.problem,
         logExcerpt: options.logExcerpt,
+        trace: options.trace ? { ...options.trace, traceFilePath } : undefined,
     })
     const playbook = readBundledPlaybook(options.packageRoot)
     const prompt = [playbook, "", "---", "", `Session context file: ${contextFilePath}`, ""].join("\n")
 
     writeFileSync(contextFilePath, context, { encoding: "utf8", mode: 0o600 })
     writeFileSync(promptFilePath, prompt, { encoding: "utf8", mode: 0o600 })
-    return { sessionDir, promptFilePath, contextFilePath }
+    return { sessionDir, promptFilePath, contextFilePath, traceFilePath }
 }
 
 /** Resolve an executable on PATH across Unix and Windows (including Windows executable shims) */
@@ -492,6 +637,24 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
     }
 
     const facts = collectProjectFacts(targetProject, environment.packageRoot, nodeVersion)
+    const theme = createCliTheme(environment.output, { env, platform })
+
+    let trace: { readonly result: TriageTraceResult; readonly redactedOutput: string } | undefined
+    if (options.run !== undefined) {
+        if (!options.print) {
+            const notice = `Running trace command with FLUXERLY_DEBUG=${env.FLUXERLY_DEBUG?.trim() || "rest,gateway"}`
+            environment.output.write(
+                theme.capabilities.color === "none" ? `${notice}\n` : `${theme.cyan(theme.symbols.pointer)} ${theme.muted(notice)}\n`,
+            )
+        }
+        const traceRunner = environment.runTraceCommand ?? defaultRunTraceCommand
+        const result = await traceRunner(options.run, {
+            cwd: targetProject,
+            env,
+            timeoutMs: environment.traceTimeoutMs ?? defaultTraceTimeoutMs,
+        })
+        trace = { result, redactedOutput: redactInlineText(result.output, home) }
+    }
 
     if (options.print) {
         const context = formatTriageContext(facts, {
@@ -504,13 +667,13 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
             generatedAt: new Date().toISOString(),
             problem: options.problem,
             logExcerpt,
+            trace,
         })
         const playbook = readBundledPlaybook(environment.packageRoot)
         environment.output.write(`${playbook}\n\n---\n\n${context}`)
         return 0
     }
 
-    const theme = createCliTheme(environment.output, { env, platform })
     if (theme.capabilities.color !== "none") {
         const banner = theme.renderBanner({
             version: facts.cliVersion,
@@ -533,6 +696,7 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
         sessionRoot: environment.sessionRoot,
         problem: options.problem,
         logExcerpt,
+        trace,
     })
 
     const detect = environment.detectCommand ?? ((command: string) => findCommandOnPath(command, env, platform))
@@ -586,7 +750,7 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
 
     const launchPrompt = buildTriageLaunchPrompt(
         session.promptFilePath,
-        options.problem !== undefined || logExcerpt !== undefined,
+        options.problem !== undefined || logExcerpt !== undefined || trace !== undefined,
     )
     if (!selected) {
         environment.output.write(

@@ -13,11 +13,11 @@ Unless the user already described the problem, ask in the first message what wen
 Read `triage-context.md` before investigating. It records:
 
 - The operating system, Node.js version, package manager and target project folder
-- The `fluxerly` CLI version that started triage separately from the `@neontechspace/fluxerly` version installed in the project's `node_modules/`
+- The `fluxerly` CLI version that started triage separately from the `@neontechspace/fluxerly` version installed in the project's `node_modules/`, together with each version's target Fluxer server commit SHA
 - Installed versions of `effect`, `typescript` and `@types/node`
 - Exact local paths to the installed SDK package folder, TypeScript source (`src/`) and `agents/AGENTS.md`
 - The complete static `fluxerly doctor` report
-- An optional `Reported symptom` or `Redacted log excerpt` when the user passed one on the command line
+- Optional `Reported symptom`, `Redacted log excerpt` (`--log`) or `Redacted debug trace (--run)` sections when the user supplied them on the command line
 
 Never assume the CLI version matches the project's installed SDK version: A user can run `npx` or a newer CLI against an older installed package
 
