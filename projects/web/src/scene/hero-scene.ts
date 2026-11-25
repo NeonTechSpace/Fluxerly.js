@@ -69,6 +69,10 @@ const swayDegreesSeconds = 13
 const leanDegrees = 1.4
 // Frame-rate independent lean damping rate (matches 0.08 per frame at 60 fps)
 const leanRate = 5
+// Frame-rate independent parallax smoothing: responsive enough to track brisk left-right pointer sweeps without cancelling
+// itself, and gentler when drifting back to center after the pointer leaves
+const parallaxFollowRate = 7.5
+const parallaxReturnRate = 2.6
 const tau = Math.PI * 2
 
 type Ease = (p: number) => number
@@ -190,6 +194,8 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
     }
 
     const pointer = { x: 0, y: 0, inside: false }
+    let targetPx = 0
+    let targetPy = 0
 
     let lean = 0
     let leaning = false
@@ -261,6 +267,11 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
         const dt = lastTickTime >= 0 ? Math.min(0.1, Math.max(0, t - lastTickTime)) : 0
         lastTickTime = t
         sceneTime = t
+        if (!disposed && dt > 0) {
+            const parallaxStep = 1 - Math.exp(-dt * (pointer.inside ? parallaxFollowRate : parallaxReturnRate))
+            state.px += (targetPx - state.px) * parallaxStep
+            state.py += (targetPy - state.py) * parallaxStep
+        }
         const motion = state.motion
         const immerse = state.immerse
         const restHeight = layout.waterLine - layout.horizon
@@ -406,8 +417,12 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
     resizeObserver.observe(hero)
 
     // Immersive only: pointer parallax, the waves highlight, the scroll dip and eye contact
-    const followX = (to: number) => tweenTo("px", to, 1.6, power3Out)
-    const followY = (to: number) => tweenTo("py", to, 1.6, power3Out)
+    const followX = (to: number) => {
+        targetPx = to
+    }
+    const followY = (to: number) => {
+        targetPy = to
+    }
     const followDip = (to: number) => {
         if (tweens.dip.active && Math.abs(tweens.dip.to - to) < 1e-5) return
         if (!tweens.dip.active && Math.abs(state.dip - to) < 1e-5) return
