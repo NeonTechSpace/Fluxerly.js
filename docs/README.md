@@ -59,14 +59,83 @@ await runBot({
 
 Try real `@neontechspace/fluxerly` JavaScript, TypeScript and Effect bots live in the browser [Playground](https://fluxerly.neontechspace.com/playground/) with zero backend setup. The same SDK powers production bots such as [NeonFlux](https://github.com/NeonTechSpace/NeonFlux)
 
+## What Fluxerly includes
+
+Built for developers at every level, from a first bot in one file to large production bots that need full control
+
+| Capability | What ships out of the box |
+| --- | --- |
+| **One-file start and scaffolding** | Interactive `fluxerly init` starters for JavaScript, TypeScript and Effect with a working test, plus `runBot` lifecycle handling and graceful Ctrl+C shutdown |
+| **Structured, actionable errors** | Network calls return a Result with stable codes, actionable fixes, typo hints and `describeError` metadata, while logs mask tokens automatically |
+| **Commands, builders and collectors** | Typed prefix commands with guards, cooldowns, middleware and generated help, alongside `EmbedBuilder`, `MessageBuilder` and message or reaction collectors |
+| **Complete Fluxer coverage** | Messages, embeds, attachments, voice notes, reactions, threads, forum posts, communities, roles, permissions, emoji, stickers, webhooks, OAuth2 and opt-in caches |
+| **Typed raw escape hatches** | Compile-time checked bot routes via `client.rest.call`, raw `client.rest.request` for brand-new routes and typed raw gateway events |
+| **Zero-network testing and playground** | In-memory Fluxer gateway, HTTP server and virtual clock via `createTestBot`, plus the browser [Playground](https://fluxerly.neontechspace.com/playground/) with fault injection and wire inspection |
+| **Two APIs, one engine** | Async/await with Results in `@neontechspace/fluxerly` and native Effect 4 in `@neontechspace/fluxerly/effect`, backed by one implementation |
+| **Production resilience** | Automatic sharding, session resume across restarts, process supervision, deadline-aware rate limiting and `observe` metrics and traces |
+| **Built-in CLI and shipped source** | Full TypeScript `src/` inside the package, `fluxerly doctor`, `fluxerly triage`, `fluxerly agents`, `fluxerly invite`, [SKILL.md](https://fluxerly.neontechspace.com/SKILL.md) and [llms.txt](https://fluxerly.neontechspace.com/llms.txt) |
+| **Tracked against Fluxer's server** | Automated drift checks across Fluxer's API docs and server source trees, verified by offline contract tests, live Fluxer checks and multi-model reviews |
+
+## Install
+
+Fluxer moves fast, and Fluxerly keeps pace. Two channels fit different bots:
+
+- **Stable:** Releases that passed every check, for bots that value calm
+- **Nightly:** The newest changes as they land, for bots that want them first
+
+Fluxerly targets Node.js 26.13 or newer. JavaScript needs no compiler, and TypeScript projects require TypeScript 7 and `@types/node`
+
+| Package manager | Stable | Nightly (exact pin) |
+| --- | --- | --- |
+| **npm** | `npm install @neontechspace/fluxerly` | `npm install --save-exact @neontechspace/fluxerly@nightly` |
+| **pnpm** | `pnpm add @neontechspace/fluxerly` | `pnpm add --save-exact @neontechspace/fluxerly@nightly` |
+| **Bun** | `bun add @neontechspace/fluxerly` | `bun add --exact @neontechspace/fluxerly@nightly` |
+
+> A committed lockfile keeps installs reproducible. Nightly releases can include breaking changes, so pinning the exact version stops fresh installs from pulling a breaking update
+
+## Getting started
+
+A bot needs a Fluxer application, its bot token and an invite to a community. [Create a bot](https://fluxerly.neontechspace.com/docs/create-a-bot/) walks through setup and permissions
+
+```sh
+npx @neontechspace/fluxerly init
+```
+
+- **Interactive setup:** Pick JavaScript, TypeScript or Effect from the menu (also works with `pnpm dlx` or `bunx`), or follow the [quick start](https://fluxerly.neontechspace.com/docs/quick-start/) by hand
+- **Flags for scripts:** Pass `--template js|ts|effect`, `--dir <folder>`, `--pm npm|pnpm|bun` or `--no-install` to skip prompts or installs
+- **Safe on existing folders:** Keeps existing `.env` files intact and appends missing `node_modules` and `.env` lines to `.gitignore`
+
+The generated `bot.js` replies **Pong!** to **!ping**:
+
+```js
+import { defineBot, runBot } from "@neontechspace/fluxerly"
+
+// The bot's options without its token, so its test can run them through createTestBot without a token or a network
+export const bot = defineBot({
+    commands: {
+        prefix: "!",
+        commands: {
+            // Returning the reply reports a failed send to the log
+            ping: { execute: ({ reply }) => reply("Pong!") },
+        },
+    },
+})
+
+// Running this file starts the bot, while importing it from a test does not.
+// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
+if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })
+```
+
+Set `FLUXER_BOT_TOKEN` in `.env`, verify with `npm test` and `npx --no fluxerly doctor`, then run `npm start` (or `npm run dev` to auto-restart on save). Send **!ping** in a channel the bot can read to see **Pong!**
+
 ## Built-in CLI: Scaffold, verify and triage
 
-Every `@neontechspace/fluxerly` install ships the `fluxerly` CLI with zero extra global tools. One command scaffolds a tested starter, audits the project offline, launches agent-powered root-cause triage, syncs coding-agent rules or builds an installation link
+Every `@neontechspace/fluxerly` install ships the `fluxerly` CLI with zero extra global tools
 
 | Command | What it does | Key flags |
 | --- | --- | --- |
 | `fluxerly init` | Creates a JavaScript, TypeScript or Effect starter bot with a working `createTestBot` test and `AGENTS.md`, then installs dependencies | `--template js\|ts\|effect`, `--dir <folder>`, `--pm npm\|pnpm\|bun`, `--no-install` |
-| `fluxerly doctor` | Verifies runtime, ESM, TypeScript, Effect, installed dependencies, source imports and secret hygiene completely offline | `--json` |
+| `fluxerly doctor` | Verifies runtime, ESM, TypeScript, Effect, installed dependencies, source imports and secret hygiene offline | `--json` |
 | `fluxerly triage` | Bundles redacted project facts, doctor checks, optional logs or debug traces and the triage playbook for a coding agent | `[problem]`, `--agent claude\|codex\|antigravity`, `--model <id>`, `--dir <folder>`, `--log <file>`, `--run <command>`, `--print` |
 | `fluxerly agents` | Writes, refreshes or checks Fluxerly rules for coding agents across `AGENTS.md`, skills and IDE rule files | `--target agents\|skill\|cursor\|claude\|gemini\|all`, `--check`, `--print` |
 | `fluxerly invite` | Generates a Fluxer bot installation URL offline from an application ID and permission names or bitfield | `<applicationId>`, `--permissions <value>` |
@@ -104,77 +173,6 @@ npx --no fluxerly triage --run "npm test" "replies fail with 403"
 <p align="center">
   <img src="/docs/assets/triage.webp" width="720" alt="Terminal running npx --no fluxerly triage with --run trace capture and the agent picker alongside a triage session panel showing redacted context, shipped source tracing, createTestBot verification and a proven permissions verdict">
 </p>
-
-## What Fluxerly includes
-
-Fluxerly is built for developers at every skill level, from a first bot in one file to large production bots that need full control
-
-| Capability | What ships out of the box |
-| --- | --- |
-| **One-file start and scaffolding** | Interactive `fluxerly init` starters for JavaScript, TypeScript and Effect with a working test, plus `runBot` lifecycle handling that connects, drains on Ctrl+C and explains failed startups with a fix |
-| **Structured, actionable errors** | Network calls return a Result instead of throwing silently, every error carries a stable code, an actionable hint, typo suggestions on unknown options and `describeError` output with `errors.apiCode`, `errors.outcome` and `errors.retryAfterMs`, while logs mask tokens and credentials automatically |
-| **Commands, builders and collectors** | Prefix commands with typed arguments, guards, cooldowns, middleware, command groups and generated help, paired with `EmbedBuilder`, `MessageBuilder` and message or reaction collectors |
-| **Complete Fluxer coverage** | Messages, embeds, attachments, voice notes, reactions, threads and forum posts, communities, roles and permissions, emoji and stickers, webhooks and OAuth2, with paginated history and opt-in bounded caches |
-| **Typed raw escape hatches** | Compile-time checked bot routes via `client.rest.call` using Fluxer's own field names, `client.rest.request` for routes newer than the SDK, and raw gateway events carrying documented payload types |
-| **Zero-network testing and playground** | In-memory Fluxer gateway, HTTP server and virtual test clock through `createTestBot` in `/testing` and `/effect/testing`, plus the browser [Playground](https://fluxerly.neontechspace.com/playground/) with fault injection and wire inspection |
-| **Two APIs, one engine** | Async/await with Results in `@neontechspace/fluxerly` and native Effect 4 with typed error channels, scopes and layers in `@neontechspace/fluxerly/effect`, backed by one implementation |
-| **Production resilience** | Automatic sharding, session resume across restarts, a process supervisor, deadline-aware rate limiting that never blindly replays uncertain writes, and metrics and traces through `observe` |
-| **Shipped source and agent workflow** | Full TypeScript `src/` and source maps inside the package, `fluxerly doctor`, `fluxerly triage`, `fluxerly agents`, `fluxerly invite`, plus [SKILL.md](https://fluxerly.neontechspace.com/SKILL.md) and [llms.txt](https://fluxerly.neontechspace.com/llms.txt) |
-| **Tracked against Fluxer's server** | Automated drift checks across Fluxer's API documents and server source trees, verified by offline contract tests, live end-to-end Fluxer checks and multi-model security reviews |
-
-The result is less infrastructure to build, with testing, diagnostics and production structure already in place
-
-## Install
-
-Fluxer moves fast, and Fluxerly keeps pace. Two channels fit different bots:
-
-- **Stable:** Releases that passed every check, for bots that value calm
-- **Nightly:** The newest changes as they land, for bots that want them first
-
-Fluxerly is tested against Node.js 26.13 or newer. JavaScript needs no compiler, and TypeScript typechecking or compilation requires TypeScript 7 and `@types/node` as a development dependency
-
-| Package manager | Stable | Nightly (exact pin) |
-| --- | --- | --- |
-| **npm** | `npm install @neontechspace/fluxerly` | `npm install --save-exact @neontechspace/fluxerly@nightly` |
-| **pnpm** | `pnpm add @neontechspace/fluxerly` | `pnpm add --save-exact @neontechspace/fluxerly@nightly` |
-| **Bun** | `bun add @neontechspace/fluxerly` | `bun add --exact @neontechspace/fluxerly@nightly` |
-
-> A committed lockfile records the exact installed version and keeps installs reproducible. Nightly releases can include breaking changes, so pinning the exact version prevents a fresh install without a lockfile from pulling a newer nightly that breaks the API
-
-## Getting started
-
-A bot needs a Fluxer application, its bot token and an invite to a community. [Create a bot](https://fluxerly.neontechspace.com/docs/create-a-bot/) walks through setup and permissions
-
-```sh
-npx @neontechspace/fluxerly init
-```
-
-- **Interactive setup:** Pick JavaScript, TypeScript or Effect from the menu (also works with `pnpm dlx` or `bunx`), or follow the [quick start](https://fluxerly.neontechspace.com/docs/quick-start/) by hand
-- **Flags for scripts:** Pass `--template js|ts|effect`, `--dir <folder>`, `--pm npm|pnpm|bun` or `--no-install` to skip prompts or installs
-- **Safe on existing folders:** Keeps existing `.env` files intact and appends missing `node_modules` and `.env` lines to `.gitignore`
-
-The generated `bot.js` replies **Pong!** to **!ping**:
-
-```js
-import { defineBot, runBot } from "@neontechspace/fluxerly"
-
-// The bot's options without its token, so its test can run them through createTestBot without a token or a network
-export const bot = defineBot({
-    commands: {
-        prefix: "!",
-        commands: {
-            // Returning the reply reports a failed send to the log
-            ping: { execute: ({ reply }) => reply("Pong!") },
-        },
-    },
-})
-
-// Running this file starts the bot, while importing it from a test does not.
-// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
-if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })
-```
-
-Set `FLUXER_BOT_TOKEN` in `.env`, verify the project with `npm test` and `npx --no fluxerly doctor`, and start the bot with `npm start` (or `npm run dev` to restart on each saved change). Send **!ping** in a channel the bot can read to see **Pong!**
 
 ## Choosing an API
 
