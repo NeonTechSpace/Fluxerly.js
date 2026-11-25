@@ -29,11 +29,13 @@
     cursor: pointer;
     transition:
         color var(--speed-fast) ease,
-        background-color var(--speed-fast) ease;
+        background-color var(--speed-fast) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 .pm-option:hover {
     color: var(--color-ink);
+    background: rgb(160 190 255 / 0.08);
 }
 
 .pm-option:has(input:checked) {

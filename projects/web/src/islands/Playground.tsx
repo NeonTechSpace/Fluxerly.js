@@ -278,6 +278,7 @@ export interface PlaygroundProps {
 export default function Playground({ stableVersion = "", nightlyVersion }: PlaygroundProps = {}) {
     const baseId = useId()
     const [still, setStill] = useState(false)
+    const [mac, setMac] = useState(false)
     const [sdkChannel, setSdkChannel] = useState<TsChannel>("stable")
     const [runtimeReloadSeq, setRuntimeReloadSeq] = useState(0)
     const [nightlyInfoOpen, setNightlyInfoOpen] = useState(false)
@@ -311,6 +312,9 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
     const [rightTab, setRightTab] = useState<RightTab>("channel")
     const [consoleEntries, setConsoleEntries] = useState<SandboxConsoleEntry[]>([])
     const [telemetry, setTelemetry] = useState<SandboxTelemetry>(emptyTelemetry)
+    const [tabPulse, setTabPulse] = useState<{ logs: number; rest: number; gateway: number }>({ logs: 0, rest: 0, gateway: 0 })
+    const prevCountsRef = useRef<{ logs: number; rest: number; gateway: number }>({ logs: 0, rest: 0, gateway: 0 })
+    const bootSettledRef = useRef(false)
     const [shareStatus, setShareStatus] = useState<"idle" | "copied" | "ready" | "too-large">("idle")
     const shareTimerRef = useRef<number | undefined>(undefined)
     const [tsDiagnostics, setTsDiagnostics] = useState<readonly TsDiagnostic[]>([])
@@ -362,6 +366,36 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
         update()
         return subscribeExperience(update)
     }, [])
+
+    useEffect(() => {
+        setMac(/Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent))
+    }, [])
+
+    const logsCount = consoleEntries.length + telemetry.logs.length
+    const restCount = telemetry.requests.length
+    const gatewayCount = telemetry.gateway.length
+
+    useEffect(() => {
+        const prev = prevCountsRef.current
+        const next = { logs: logsCount, rest: restCount, gateway: gatewayCount }
+        prevCountsRef.current = next
+        if (!bootSettledRef.current) {
+            if (hashSettled && bootState === "ready" && !running && (lastRanRef.current !== null || sharedPendingRun)) {
+                bootSettledRef.current = true
+            }
+            return
+        }
+        const bumpLogs = rightTab !== "logs" && next.logs > prev.logs
+        const bumpRest = rightTab !== "rest" && next.rest > prev.rest
+        const bumpGateway = rightTab !== "gateway" && next.gateway > prev.gateway
+        if (bumpLogs || bumpRest || bumpGateway) {
+            setTabPulse((current) => ({
+                logs: bumpLogs ? current.logs + 1 : current.logs,
+                rest: bumpRest ? current.rest + 1 : current.rest,
+                gateway: bumpGateway ? current.gateway + 1 : current.gateway,
+            }))
+        }
+    }, [logsCount, restCount, gatewayCount, rightTab, bootState, running, hashSettled, sharedPendingRun])
 
     // Restore shared code from URL hash (#s=...) or preset hash (#results, #effect, etc.) on mount.
     // Shared snippets (#s=...) never execute automatically on arrival; the visitor reviews and clicks Run explicitly
@@ -671,6 +705,20 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
                         text: data.note,
                     },
                 ])
+                return
+            }
+
+            if (data.type === "faultCleared") {
+                if (data.requestId !== activeFaultIdRef.current) return
+                setTelemetry(data.telemetry)
+                setArmedFault(null)
+                appendChat([
+                    {
+                        id: chatSeqRef.current++,
+                        kind: "system",
+                        text: data.note,
+                    },
+                ])
             }
         }
 
@@ -695,17 +743,17 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
     }, [code, mode, autoRun, bootState, hashSettled, sharedPendingRun, triggerRun])
 
     useEffect(() => {
-        if (chat.length === 0) {
+        if (chat.length === 0 && !sending) {
             lastScrolledChatIdRef.current = 0
             return
         }
         if (rightTab !== "channel") return
         const latestId = chat.at(-1)?.id ?? 0
-        if (latestId === lastScrolledChatIdRef.current) return
+        if (!sending && latestId === lastScrolledChatIdRef.current) return
         lastScrolledChatIdRef.current = latestId
         const log = chatLogRef.current
         if (log) log.scrollTop = log.scrollHeight
-    }, [chat, rightTab])
+    }, [chat, rightTab, sending])
 
     const onTabKeyDown = (event: { key: string; preventDefault(): void }, current: RightTab) => {
         const index = rightTabs.indexOf(current)
@@ -787,6 +835,11 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
         if (!interactive || running) return
         const requestId = ++reqSeqRef.current
         activeFaultIdRef.current = requestId
+        if (fault !== "disconnect" && armedFault === fault) {
+            setArmedFault(null)
+            postToSandbox({ type: "clearFault", requestId })
+            return
+        }
         postToSandbox({ type: "fault", requestId, fault })
     }
 
@@ -847,10 +900,7 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
                 </h1>
                 <div className="pg-channel-bar">
                     {(sdkVersion || (sdkChannel === "nightly" ? nightlyVersion : stableVersion)) && (
-                        <span
-                            className="pg-sdk-tag"
-                            title={`@neontechspace/fluxerly@${sdkVersion || (sdkChannel === "nightly" ? nightlyVersion : stableVersion)}`}
-                        >
+                        <span className="pg-sdk-tag">
                             v{sdkVersion || (sdkChannel === "nightly" ? nightlyVersion : stableVersion)}
                         </span>
                     )}
@@ -879,7 +929,6 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
                                 aria-pressed={sdkChannel === "nightly"}
                                 aria-disabled={!nightlyVersion}
                                 aria-describedby={!nightlyVersion ? `${baseId}-nightly-info` : undefined}
-                                title={nightlyVersion ? `Switch to Nightly v${nightlyVersion}` : undefined}
                                 onClick={() => selectSdkChannel("nightly")}
                             >
                                 <span className="pg-channel-label">Nightly</span>
@@ -946,7 +995,7 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
                         Reset
                     </button>
 
-                    <button type="button" className="pg-btn pg-btn-subtle" onClick={() => void shareLink()} aria-label="Copy shareable playground URL">
+                    <button type="button" className="pg-btn pg-btn-subtle pg-btn-share" onClick={() => void shareLink()} aria-label="Copy shareable playground URL">
                         {shareStatus === "copied" || shareStatus === "ready" ? (
                             <CheckIcon size={16} weight="bold" aria-hidden="true" />
                         ) : shareStatus === "too-large" ? (
@@ -994,7 +1043,7 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
                                 <input type="checkbox" checked={autoRun} onChange={(event) => setAutoRun(event.target.checked)} />
                                 <span>Auto-Run</span>
                             </label>
-                            <span className="pg-shortcut" aria-hidden="true">Ctrl+Enter</span>
+                            <span className="pg-shortcut" aria-hidden="true">{mac ? "Cmd+Enter" : "Ctrl+Enter"}</span>
                         </div>
                     </header>
 
@@ -1016,10 +1065,17 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
                         <div className="pg-error-drawer" role="alert">
                             <div className="pg-error-head">
                                 <WarningCircleIcon size={18} weight="fill" aria-hidden="true" />
-                                <strong>
-                                    {bootError ? "Runtime Load Error" : runError!.name}
-                                    {runError?.line ? ` (line ${runError.line})` : ""}
-                                </strong>
+                                <strong>{bootError ? "Runtime Load Error" : runError!.name}</strong>
+                                {!bootError && runError?.line !== undefined && (
+                                    <button
+                                        type="button"
+                                        className="pg-error-line-btn"
+                                        onClick={() => setJumpTarget({ line: runError.line, seq: jumpSeqRef.current++ })}
+                                        aria-label={`Jump to line ${runError.line} in editor`}
+                                    >
+                                        Line {runError.line}
+                                    </button>
+                                )}
                             </div>
                             <pre className="pg-error-pre">{bootError ?? runError!.message}</pre>
                         </div>
@@ -1061,7 +1117,9 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
                                 onKeyDown={(event) => onTabKeyDown(event, "logs")}
                             >
                                 Logs
-                                <span className="pg-vtab-count">{consoleEntries.length + telemetry.logs.length}</span>
+                                <span key={`logs-${tabPulse.logs}`} className="pg-vtab-count" data-pulse={tabPulse.logs > 0 || undefined}>
+                                    {logsCount}
+                                </span>
                             </button>
                             <button
                                 ref={(node) => {
@@ -1078,7 +1136,9 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
                                 onKeyDown={(event) => onTabKeyDown(event, "rest")}
                             >
                                 REST
-                                <span className="pg-vtab-count">{telemetry.requests.length}</span>
+                                <span key={`rest-${tabPulse.rest}`} className="pg-vtab-count" data-pulse={tabPulse.rest > 0 || undefined}>
+                                    {restCount}
+                                </span>
                             </button>
                             <button
                                 ref={(node) => {
@@ -1095,7 +1155,9 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
                                 onKeyDown={(event) => onTabKeyDown(event, "gateway")}
                             >
                                 WS
-                                <span className="pg-vtab-count">{telemetry.gateway.length}</span>
+                                <span key={`ws-${tabPulse.gateway}`} className="pg-vtab-count" data-pulse={tabPulse.gateway > 0 || undefined}>
+                                    {gatewayCount}
+                                </span>
                             </button>
                         </div>
 
@@ -1105,6 +1167,7 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
                                     type="button"
                                     className="pg-fault-btn"
                                     data-armed={armedFault === "429" || undefined}
+                                    aria-pressed={armedFault === "429"}
                                     disabled={!interactive || running}
                                     onClick={() => triggerFault("429")}
                                 >
@@ -1115,6 +1178,7 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
                                     type="button"
                                     className="pg-fault-btn"
                                     data-armed={armedFault === "403" || undefined}
+                                    aria-pressed={armedFault === "403"}
                                     disabled={!interactive || running}
                                     onClick={() => triggerFault("403")}
                                 >
@@ -1185,6 +1249,16 @@ export default function Playground({ stableVersion = "", nightlyVersion }: Playg
                                         )}
                                     </div>
                                 ))
+                            )}
+                            {sending && (
+                                <div className="pg-msg pg-msg-bot pg-msg-typing" role="status">
+                                    <span className="sr-only">Bot is replying</span>
+                                    <span className="pg-msg-text pg-dots" aria-hidden="true">
+                                        <i />
+                                        <i />
+                                        <i />
+                                    </span>
+                                </div>
                             )}
                         </div>
 

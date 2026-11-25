@@ -54,7 +54,8 @@ import { links } from "../lib/links"
         isolation: isolate;
         transition:
             color var(--speed-fast) ease,
-            box-shadow var(--speed-normal) ease;
+            box-shadow var(--speed-normal) ease,
+            scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
     }
 
     /* Each glass control draws its rim as a one pixel ring in a pseudo element. The ring is a masked
@@ -93,7 +94,8 @@ import { links } from "../lib/links"
         overflow: hidden;
         transition:
             color var(--speed-normal) ease,
-            box-shadow var(--speed-slow) ease;
+            box-shadow var(--speed-slow) ease,
+            scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
     }
 
     .primary::before {
@@ -186,7 +188,8 @@ import { links } from "../lib/links"
             --rim-angle 900ms cubic-bezier(0.3, 0.6, 0.2, 1),
             --nebula var(--speed-slow) ease,
             color var(--speed-normal) ease,
-            box-shadow var(--speed-slow) ease;
+            box-shadow var(--speed-slow) ease,
+            scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
     }
 
     .secondary::before {

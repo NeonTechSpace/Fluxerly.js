@@ -281,7 +281,8 @@ const npmMark =
             0 0 0 1px rgb(4 5 26 / 0.4);
         transition:
             border-color var(--speed-fast) ease,
-            box-shadow var(--speed-normal) ease;
+            box-shadow var(--speed-normal) ease,
+            scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
     }
 
     a.coin:hover,
@@ -351,7 +352,8 @@ const npmMark =
         cursor: pointer;
         transition:
             color var(--speed-fast) ease,
-            background-color var(--speed-fast) ease;
+            background-color var(--speed-fast) ease,
+            scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
     }
 
     .tool-button:hover,
@@ -392,9 +394,15 @@ const npmMark =
         transform: none;
     }
 
+    :global(html:not([data-still])) .copy[data-copied] {
+        animation: copy-ring 480ms cubic-bezier(0.2, 0.7, 0.2, 1) 1;
+    }
+
     /* Still turns the caret, swaps the copy icons and opens the menu at once */
     .row[data-still] :is(.pick, .copy) :global(svg),
-    .row[data-still] .menu {
+    .row[data-still] .menu,
+    :global(html[data-still]) :is(.pick, .copy) :global(svg),
+    :global(html[data-still]) .menu {
         transition: none;
     }
 
@@ -480,11 +488,13 @@ const npmMark =
         cursor: pointer;
         transition:
             color var(--speed-fast) ease,
-            background-color var(--speed-fast) ease;
+            background-color var(--speed-fast) ease,
+            scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
     }
 
     .option:hover {
         color: var(--color-ink);
+        background: rgb(195 200 230 / 0.1);
     }
 
     .option:has(input:checked) {
@@ -609,10 +619,32 @@ const npmMark =
             padding-block: 3px;
         }
 
+        .menu[hidden] {
+            transform: translateY(-6px);
+        }
+
+        @starting-style {
+            .menu {
+                opacity: 0;
+                transform: translateY(-6px);
+            }
+        }
+
         /* Without room under the row, which script measures as it opens, the menu opens over it */
         .menu[data-up] {
             top: auto;
             bottom: calc(100% + 4px);
+        }
+
+        .menu[data-up][hidden] {
+            transform: translateY(6px);
+        }
+
+        @starting-style {
+            .menu[data-up] {
+                opacity: 0;
+                transform: translateY(6px);
+            }
         }
 
         /* Nor over it, as on a phone on its side 320 px tall: beside the row, level with the box as on a wide screen, its
@@ -625,6 +657,17 @@ const npmMark =
             row-gap: 14px;
             justify-content: flex-start;
             max-width: calc(var(--side-room) - 10px - var(--page-margin));
+        }
+
+        .menu[data-side][hidden] {
+            transform: translateX(-8px);
+        }
+
+        @starting-style {
+            .menu[data-side] {
+                opacity: 0;
+                transform: translateX(-8px);
+            }
         }
 
         .menu[data-side] .menu-divider {

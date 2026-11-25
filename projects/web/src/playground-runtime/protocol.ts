@@ -115,6 +115,10 @@ export type ParentToSandboxMessage =
           readonly fault: SandboxFaultKind
       }
     | {
+          readonly type: "clearFault"
+          readonly requestId: number
+      }
+    | {
           readonly type: "dispose"
       }
     | {
@@ -163,4 +167,10 @@ export type SandboxToParentMessage =
           readonly note: string
           readonly telemetry: SandboxTelemetry
           readonly error?: SandboxErrorPayload
+      }
+    | {
+          readonly type: "faultCleared"
+          readonly requestId: number
+          readonly note: string
+          readonly telemetry: SandboxTelemetry
       }

@@ -137,20 +137,12 @@ const facts = ["Results, hints and structured errors", "Commands, builders and c
     }
 
 
-    .item:hover .item-icon {
-        transform: translateX(3px);
-        filter: brightness(1.15) drop-shadow(0 4px 6px rgb(0 0 0 / 0.45));
-    }
-
     .item-icon {
         flex: none;
         width: 64px;
         height: 64px;
         object-fit: contain;
         filter: drop-shadow(0 4px 6px rgb(0 0 0 / 0.45));
-        transition:
-            transform var(--speed-normal) ease,
-            filter var(--speed-normal) ease;
     }
 
     /* One column, read top to bottom. The icon marks the start of each part */
@@ -242,15 +234,5 @@ const facts = ["Results, hints and structured errors", "Commands, builders and c
         .item {
             gap: 16px;
         }
-    }
-
-    /* Time stopped: the icons keep still when pointed at */
-    :global(html[data-still]) .item-icon {
-        transition: none;
-    }
-
-    :global(html[data-still]) .item:hover .item-icon {
-        transform: none;
-        filter: drop-shadow(0 4px 6px rgb(0 0 0 / 0.45));
     }
 </style>

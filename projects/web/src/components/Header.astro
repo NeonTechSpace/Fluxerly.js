@@ -37,7 +37,7 @@ const current = Astro.url.pathname.replace(/\/$/, "")
             <TerminalWindowIcon className="nav-icon" size={21} aria-hidden="true" />
             <span class="nav-label">Playground</span>
         </a>
-        <a class="nav-item" href={links.docs}>Docs</a>
+        <a class="nav-item" href={links.docs} aria-current={current === "/docs" || current.startsWith("/docs/") ? "page" : undefined}>Docs</a>
         <a class="nav-item" href={links.github} target="_blank" rel="noopener">
             <GithubLogoIcon className="nav-icon" size={22} aria-hidden="true" />
             <span class="nav-label">GitHub</span>
@@ -69,8 +69,8 @@ const current = Astro.url.pathname.replace(/\/$/, "")
 
     // Hides the header while reading down the page and shows it again on the way up
     function watchHeader(header: HTMLElement) {
-        // Scroll distance in one direction before the header changes, so small jitters do nothing
-        const threshold = 12
+        // Scroll distance in one direction before the header changes, so small trackpad nudges do nothing
+        const threshold = 28
         let lastY = window.scrollY
         let travel = 0
         let hidden = false
@@ -154,7 +154,7 @@ const current = Astro.url.pathname.replace(/\/$/, "")
         transform: translateY(calc(-100% - 32px));
         transition:
             transform var(--speed-normal) ease,
-            visibility 0ms linear 200ms;
+            visibility 0ms linear var(--speed-normal);
     }
 
     /* Soft dark backdrop that keeps the header readable over content. It is dark enough on its own, without a
@@ -196,7 +196,7 @@ const current = Astro.url.pathname.replace(/\/$/, "")
     }
 
     .home:focus-visible {
-        outline: 2px solid var(--color-cyan);
+        outline: 2px solid var(--accent, var(--color-cyan));
         outline-offset: 6px;
     }
 
@@ -292,6 +292,7 @@ const current = Astro.url.pathname.replace(/\/$/, "")
     }
 
     .nav-item {
+        position: relative;
         display: inline-flex;
         align-items: center;
         gap: 6px;
@@ -312,6 +313,15 @@ const current = Astro.url.pathname.replace(/\/$/, "")
     .nav-item:not([aria-disabled="true"]):hover,
     .nav-item[aria-current="page"] {
         color: var(--color-ink);
+    }
+
+    .nav-item[aria-current="page"]::after {
+        content: "";
+        position: absolute;
+        inset: auto 2px 0;
+        height: 2px;
+        border-radius: 1px;
+        background: var(--accent, var(--color-cyan));
     }
 
     /* The GitHub mark stands in for the word on narrow screens only */
@@ -358,7 +368,7 @@ const current = Astro.url.pathname.replace(/\/$/, "")
         transition:
             opacity var(--speed-fast) ease,
             transform var(--speed-fast) ease,
-            visibility 0ms linear 160ms;
+            visibility 0ms linear var(--speed-fast);
     }
 
     /* Bridges the gap to the button, so the pointer can move onto the tooltip without losing it */
@@ -388,7 +398,7 @@ const current = Astro.url.pathname.replace(/\/$/, "")
         transition:
             opacity var(--speed-fast) ease,
             transform var(--speed-fast) ease,
-            visibility 0ms linear 160ms;
+            visibility 0ms linear var(--speed-fast);
     }
 
     .modes :global(.mode-control:has(:focus-visible) .mode-tip),
@@ -476,6 +486,10 @@ const current = Astro.url.pathname.replace(/\/$/, "")
             min-height: 44px;
             justify-content: center;
             padding: 0 2px;
+        }
+
+        .nav-item[aria-current="page"]::after {
+            inset: auto 8px 6px;
         }
 
         .nav-icon {

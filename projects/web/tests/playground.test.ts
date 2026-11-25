@@ -167,6 +167,17 @@ test("real browser Fluxerly SDK runtime boots and executes every playground pres
         assert.equal((afterClean.replies as unknown[]).length, 1)
         assert.equal(((afterClean.telemetry as { counters: { rateLimitWaits: number } }).counters).rateLimitWaits, waitsBefore)
 
+        // Clearing an armed fault removes the responder so the next message succeeds normally
+        sandbox.send({ type: "fault", requestId: reqSeq++, fault: "403" })
+        assert.equal((await sandbox.nextMessage("faultResult")).ok, true)
+        sandbox.send({ type: "clearFault", requestId: reqSeq++ })
+        const cleared = await sandbox.nextMessage("faultCleared")
+        assert.equal(cleared.type, "faultCleared")
+        sandbox.send({ type: "say", requestId: reqSeq++, content: "!ping" })
+        const afterDisarm = await sandbox.nextMessage("sayResult")
+        assert.equal(afterDisarm.ok, true)
+        assert.equal((afterDisarm.replies as unknown[]).length, 1)
+
         // Overlapping runs: slower Run 1 cannot overwrite faster Run 2 after Run 2 succeeds
         const slowRunId = runSeq++
         const fastRunId = runSeq++

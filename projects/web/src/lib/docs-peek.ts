@@ -106,6 +106,7 @@ let wanted: HTMLAnchorElement | undefined
 let shown: HTMLAnchorElement | undefined
 let openTimer: number | undefined
 let closeTimer: number | undefined
+let hideTimer: number | undefined
 let closedAt = Number.NEGATIVE_INFINITY
 let previousDescription: string | null = null
 
@@ -172,6 +173,7 @@ async function open(trigger: HTMLAnchorElement) {
     // The pointer may have moved on while the index loaded. A mark the index doesn't know simply has no card
     if (wanted !== trigger || !trigger.isConnected || (all && !entry)) return
     const peek = cardElement()
+    clearTimeout(hideTimer)
     // An index that didn't load says so in the card, and the next hover tries again
     peek.innerHTML = all && entry ? cardHtml(key, entry, all) : '<p class="peek-text">This explanation couldn\'t load. The link still opens the page</p>'
     peek.dataset.form = entry?.f ?? "sig"
@@ -201,17 +203,24 @@ function forget(trigger: HTMLAnchorElement) {
     previousDescription = null
 }
 
-function close() {
+function close(immediate = false) {
     clearTimeout(openTimer)
     clearTimeout(closeTimer)
+    clearTimeout(hideTimer)
     if (shown) {
         forget(shown)
         closedAt = performance.now()
     }
     wanted = shown = undefined
     if (card) {
-        card.hidden = true
         card.classList.remove("is-open")
+        if (immediate || still() || card.hidden) {
+            card.hidden = true
+        } else {
+            hideTimer = window.setTimeout(() => {
+                if (card && !shown) card.hidden = true
+            }, 160)
+        }
     }
 }
 
@@ -250,7 +259,7 @@ function intend(trigger: HTMLAnchorElement, delay: number) {
     }
     // Soon after a card closed, the next mark opens after a switch's short pause, never at once
     const warm = performance.now() - closedAt < warmFor
-    close()
+    close(true)
     wanted = trigger
     void load()
     openAfter(trigger, warm ? Math.min(delay, switchDelay) : delay)
@@ -321,7 +330,7 @@ function setup() {
     )
     window.addEventListener("resize", () => {
         refreshZoom()
-        close()
+        close(true)
     })
     window.addEventListener("pagereveal", refreshZoom)
 }

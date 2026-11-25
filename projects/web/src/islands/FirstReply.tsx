@@ -95,6 +95,7 @@ export default function FirstReply() {
     const rootRef = useRef<HTMLDivElement>(null)
     const windowRef = useRef<HTMLDivElement>(null)
     const logRef = useRef<HTMLOListElement>(null)
+    const inputRef = useRef<HTMLInputElement>(null)
     const sendRef = useRef<HTMLButtonElement>(null)
     const preRef = useRef<HTMLPreElement>(null)
     const tabRefs = useRef<(HTMLButtonElement | null)[]>([])
@@ -285,7 +286,17 @@ export default function FirstReply() {
                         )}
                         {silent && (
                             <li className="fr-silent">
-                                The starter only answers <code>{trigger}</code>
+                                The starter only answers{" "}
+                                <button
+                                    type="button"
+                                    className="fr-hint-cmd"
+                                    onClick={() => {
+                                        setDraft(trigger)
+                                        inputRef.current?.focus()
+                                    }}
+                                >
+                                    <code>{trigger}</code>
+                                </button>
                             </li>
                         )}
                     </ol>
@@ -297,6 +308,7 @@ export default function FirstReply() {
                         }}
                     >
                         <input
+                            ref={inputRef}
                             className="fr-input"
                             type="text"
                             value={draft}

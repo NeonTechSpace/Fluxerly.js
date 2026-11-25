@@ -48,17 +48,32 @@ const entryIcons: Record<string, IconName> = { "js-ts": "sdk-package", effect: "
         <section class="ref-group">
             <Heading level={2} id="tasks">Find a Method by Task</Heading>
             <p class="ref-intro">Each client method, listed by what it does, with the first sentence of its documentation</p>
-            <p class="ref-more"><a href={tasksUrl}>Open the task index</a></p>
+            <p class="ref-more">
+                <a class="prose-link go-link" href={tasksUrl}>
+                    Open the Task Index
+                    <ArrowRightIcon size={15} weight="bold" aria-hidden="true" />
+                </a>
+            </p>
         </section>
         <section class="ref-group">
             <Heading level={2} id="endpoints">Fluxer Endpoints</Heading>
             <p class="ref-intro">Each Fluxer HTTP route a bot can use, with the Fluxerly method that calls it and a link to Fluxer's own docs for it</p>
-            <p class="ref-more"><a href={endpointsUrl}>Open the endpoint map</a></p>
+            <p class="ref-more">
+                <a class="prose-link go-link" href={endpointsUrl}>
+                    Open the Endpoint Map
+                    <ArrowRightIcon size={15} weight="bold" aria-hidden="true" />
+                </a>
+            </p>
         </section>
         <section class="ref-group">
             <Heading level={2} id="codes">Error and Log Codes</Heading>
             <p class="ref-intro">Every error and log record carries a stable code. Look one up to learn what it means and what to do</p>
-            <p class="ref-more"><a href={codesUrl}>Look up a code</a></p>
+            <p class="ref-more">
+                <a class="prose-link go-link" href={codesUrl}>
+                    Look Up a Code
+                    <ArrowRightIcon size={15} weight="bold" aria-hidden="true" />
+                </a>
+            </p>
         </section>
     </div>
 </Docs>

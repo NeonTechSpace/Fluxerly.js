@@ -14,11 +14,13 @@
     transition:
         color var(--speed-normal) ease,
         border-color var(--speed-normal) ease,
-        background-color var(--speed-normal) ease;
+        background-color var(--speed-normal) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 /* Before the module script reconciles the visitor's choice, hold transitions so Still never animates into place */
-.motion:not([data-ready]) {
+.motion:not([data-ready]),
+html[data-still] .motion {
     transition: none;
 }
 

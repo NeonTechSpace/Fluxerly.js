@@ -89,10 +89,22 @@ const { plain = false } = Astro.props
         text-decoration: none;
         border-radius: var(--corner-small);
         corner-shape: squircle;
+        transition: color var(--speed-fast) ease;
+    }
+
+    .name:hover,
+    .name:focus-visible {
+        color: #ffffff;
     }
 
     .js {
         color: var(--color-cyan);
+        transition: color var(--speed-fast) ease;
+    }
+
+    .name:hover .js,
+    .name:focus-visible .js {
+        color: var(--color-cyan-light);
     }
 
     .tagline {

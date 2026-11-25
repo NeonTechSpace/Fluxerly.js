@@ -779,6 +779,17 @@ async function handleFault(requestId: number, fault: SandboxFaultKind): Promise<
     }
 }
 
+function handleClearFault(requestId: number): void {
+    activeFaultRoute?.remove()
+    activeFaultRoute = undefined
+    post({
+        type: "faultCleared",
+        requestId,
+        note: "Cleared armed HTTP fault responder",
+        telemetry: activeHandle ? activeHandle.telemetry() : emptyTelemetry(),
+    })
+}
+
 globalThis.addEventListener("message", (event: MessageEvent<ParentToSandboxMessage>) => {
     if (!isWorkerScope && event.source !== undefined && event.source !== globalThis.parent) return
     const data = event.data
@@ -789,6 +800,8 @@ globalThis.addEventListener("message", (event: MessageEvent<ParentToSandboxMessa
         void handleSay(data.requestId, data.content)
     } else if (data.type === "fault") {
         void handleFault(data.requestId, data.fault)
+    } else if (data.type === "clearFault") {
+        handleClearFault(data.requestId)
     } else if (data.type === "dispose") {
         latestRunId += 1
         void disposeActive()

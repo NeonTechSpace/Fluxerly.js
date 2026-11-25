@@ -1544,8 +1544,8 @@ const { stops } = Astro.props
         white-space: nowrap;
         opacity: 0;
         transition:
-            max-width var(--speed-slow) cubic-bezier(0.2, 0.7, 0.2, 1),
-            opacity var(--speed-normal) ease;
+            max-width var(--speed-normal) cubic-bezier(0.2, 0.7, 0.2, 1),
+            opacity var(--speed-fast) ease;
     }
 
     /* One station is lit: the section the reader is in. Pointing at another only brightens its ring a little,
@@ -1633,7 +1633,11 @@ const { stops } = Astro.props
     .night[data-still] .log-dot,
     .night[data-still] .log-number,
     .night[data-still] .log-label,
-    .night[data-still] .thread-stations :global(*) {
+    .night[data-still] .thread-stations :global(*),
+    :global(html[data-still]) .log,
+    :global(html[data-still]) .log-dot,
+    :global(html[data-still]) .log-number,
+    :global(html[data-still]) .log-label {
         transition: none;
     }
 

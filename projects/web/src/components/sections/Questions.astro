@@ -249,6 +249,15 @@ export const homeFaq = questions.map(({ question, answer }) => ({ question, answ
         padding-inline: 16px;
         scroll-margin-top: 120px;
         border-bottom: 1px solid var(--color-divider);
+        border-radius: var(--corner-medium);
+        corner-shape: squircle;
+        transition: background-color var(--speed-fast) ease;
+    }
+
+    @media (hover: hover) {
+        .item:not([open]):has(> summary:hover) {
+            background-color: rgb(165 124 255 / 0.06);
+        }
     }
 
     .item[open] {
@@ -285,10 +294,17 @@ export const homeFaq = questions.map(({ question, answer }) => ({ question, answ
         border-radius: var(--corner-small);
         corner-shape: squircle;
         cursor: pointer;
+        transition:
+            color var(--speed-fast) ease,
+            scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
     }
 
     summary::-webkit-details-marker {
         display: none;
+    }
+
+    summary .question {
+        transition: color var(--speed-fast) ease;
     }
 
     summary:hover .question {
@@ -304,6 +320,20 @@ export const homeFaq = questions.map(({ question, answer }) => ({ question, answ
         stroke: var(--accent);
         stroke-width: 1.7;
         stroke-linecap: round;
+        transition:
+            stroke var(--speed-fast) ease,
+            transform var(--speed-fast) ease;
+    }
+
+    @media (hover: hover) {
+        .item:not([open]) > summary:hover .mark {
+            stroke: var(--color-violet-pale);
+            transform: translateY(-1px) scale(1.06);
+        }
+
+        .item[open] > summary:hover .mark {
+            stroke: var(--color-violet-pale);
+        }
     }
 
     .mark path {
@@ -364,7 +394,8 @@ export const homeFaq = questions.map(({ question, answer }) => ({ question, answ
         }
     }
 
-    :global(.night[data-still]) .item[open] summary::after {
+    :global(.night[data-still]) .item[open] summary::after,
+    :global(html[data-still]) .item[open] summary::after {
         animation: none;
         opacity: 0;
     }
@@ -395,9 +426,20 @@ export const homeFaq = questions.map(({ question, answer }) => ({ question, answ
         font-weight: var(--weight-medium);
     }
 
+    :global(.night[data-still]) .item,
     :global(.night[data-still]) .item::details-content,
-    :global(.night[data-still]) .mark path {
+    :global(.night[data-still]) .mark,
+    :global(.night[data-still]) .mark path,
+    :global(html[data-still]) .item,
+    :global(html[data-still]) .item::details-content,
+    :global(html[data-still]) .mark,
+    :global(html[data-still]) .mark path {
         transition: none;
+    }
+
+    :global(.night[data-still]) .item:not([open]) > summary:hover .mark,
+    :global(html[data-still]) .item:not([open]) > summary:hover .mark {
+        transform: none;
     }
 
 </style>

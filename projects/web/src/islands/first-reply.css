@@ -78,7 +78,46 @@
 .fr-silent code {
     font-family: var(--font-mono);
     font-size: 0.95em;
-    color: var(--color-muted);
+    color: inherit;
+}
+
+.fr-hint-cmd {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 7px;
+    font: inherit;
+    color: var(--color-cyan-light);
+    background: rgb(70 227 239 / 0.12);
+    border: 1px solid rgb(70 227 239 / 0.34);
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+    cursor: pointer;
+    transition:
+        color var(--speed-fast) ease,
+        background-color var(--speed-fast) ease,
+        border-color var(--speed-fast) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.fr-hint-cmd::after {
+    content: "";
+    position: absolute;
+    inset: min(-10px, calc(50% - 22px)) min(-8px, calc(50% - 22px));
+}
+
+@media (hover: hover) {
+    .fr-hint-cmd:hover {
+        color: var(--color-cyan-pale);
+        background: rgb(70 227 239 / 0.22);
+        border-color: rgb(70 227 239 / 0.65);
+    }
+}
+
+.fr-hint-cmd:focus-visible {
+    color: var(--color-cyan-pale);
+    background: rgb(70 227 239 / 0.22);
+    border-color: rgb(70 227 239 / 0.65);
 }
 
 .fr-bubble {
@@ -161,6 +200,13 @@
     border: 1px solid rgb(160 190 255 / 0.18);
     border-radius: var(--corner-medium);
     corner-shape: squircle;
+    transition:
+        border-color var(--speed-fast) ease,
+        background-color var(--speed-fast) ease;
+}
+
+.fr-input:hover {
+    border-color: rgb(160 190 255 / 0.42);
 }
 
 .fr-input:focus-visible {
@@ -184,15 +230,38 @@
     border: 1px solid rgb(120 240 250 / 0.45);
     border-radius: var(--corner-medium);
     corner-shape: squircle;
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.3);
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.3),
+        0 8px 20px -12px rgb(70 227 239 / 0.48);
     cursor: pointer;
     transition:
-        background-color var(--speed-fast) ease,
-        border-color var(--speed-fast) ease;
+        border-color var(--speed-fast) ease,
+        box-shadow var(--speed-normal) ease,
+        opacity var(--speed-fast) ease,
+        transform var(--speed-fast) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
-.fr-send:hover {
-    border-color: rgb(160 245 252 / 0.8);
+@media (hover: hover) {
+    .fr-send:hover:not(:disabled) {
+        border-color: rgb(160 245 252 / 0.85);
+        transform: translateY(-1px);
+        box-shadow:
+            inset 0 1px 0 rgb(255 255 255 / 0.38),
+            0 10px 26px -8px rgb(70 227 239 / 0.75);
+    }
+
+    .fr-send:hover:not(:disabled) .fr-send-waves {
+        transform: translateX(2px);
+    }
+}
+
+.fr-send:focus-visible {
+    border-color: rgb(160 245 252 / 0.85);
+    transform: translateY(-1px);
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.38),
+        0 10px 26px -8px rgb(70 227 239 / 0.75);
 }
 
 /* The conductor's waves carry the message */
@@ -206,13 +275,23 @@
     transition: transform var(--speed-normal) ease;
 }
 
-.fr-send:hover .fr-send-waves {
+.fr-send:focus-visible .fr-send-waves {
     transform: translateX(2px);
 }
 
-.fr-send:disabled {
+.fr-send:disabled:not([data-busy]) {
     opacity: 0.5;
     cursor: default;
+}
+
+/* While a signal is riding out, keep Send luminous instead of dimmed */
+.fr-send[data-busy] {
+    opacity: 0.96;
+    cursor: default;
+    border-color: rgb(160 245 252 / 0.76);
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.34),
+        0 0 22px -4px rgb(70 227 239 / 0.65);
 }
 
 .fr-note {
@@ -259,11 +338,13 @@
     cursor: pointer;
     transition:
         color var(--speed-fast) ease,
-        background-color var(--speed-fast) ease;
+        background-color var(--speed-fast) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 .fr-tab:hover {
     color: var(--color-ink);
+    background: rgb(160 190 255 / 0.06);
 }
 
 .fr-tab[aria-selected="true"] {
@@ -449,8 +530,20 @@
 
 .fr[data-still] .fr-pre .ln,
 .fr[data-still] .fr-tab,
-.fr[data-still] .fr-send {
+.fr[data-still] .fr-send,
+.fr[data-still] .fr-send-waves,
+.fr[data-still] .fr-hint-cmd,
+html[data-still] .fr-send,
+html[data-still] .fr-send-waves,
+html[data-still] .fr-hint-cmd {
     transition: none;
+}
+
+.fr[data-still] .fr-send:is(:hover, :focus-visible),
+.fr[data-still] .fr-send:is(:hover, :focus-visible) .fr-send-waves,
+html[data-still] .fr-send:is(:hover, :focus-visible),
+html[data-still] .fr-send:is(:hover, :focus-visible) .fr-send-waves {
+    transform: none;
 }
 
 @media (max-width: 899px) {

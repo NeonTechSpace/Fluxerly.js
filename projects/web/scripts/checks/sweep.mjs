@@ -1248,7 +1248,7 @@ serial("alive", ["/", "/commands/", "/docs/"], async () => {
         const open = () => trigger.getAttribute("aria-expanded")
         await trigger.hover()
         // Past the pause before hovering opens the menu
-        await page.clock.runFor(60)
+        await page.clock.runFor(120)
         if ((await open()) !== "true") report("hovering doesn't open the Discover menu", "/commands/")
         await trigger.click()
         if ((await open()) !== "true") report("a reflex click closes the Discover menu that hovering just opened", "/commands/")

@@ -155,7 +155,7 @@ body {
 }
 
 :focus-visible {
-    outline: 2px solid var(--color-cyan);
+    outline: 2px solid var(--accent, var(--color-cyan));
     outline-offset: 3px;
 }
 
@@ -205,9 +205,19 @@ body {
     transform: translate(-50%, 0);
 }
 
+html[data-still] .copy-failed {
+    transform: translate(-50%, 0);
+    transition: none;
+}
+
 /* A control answers a mouse press with a short press in. Under a finger it would only look like it shrank */
 @media (hover: hover) and (pointer: fine) {
-    html:not([data-still]) :is(button, .control, .pager-link, .next-link):not(:disabled):active {
+    html:not([data-still])
+        :is(button, .control, .pager-link, .next-link, .way, .source, .visit, a.coin, .pm-option, .option, summary):not(
+            :disabled,
+            [aria-disabled="true"],
+            .station-head
+        ):active {
         scale: 0.98;
     }
 }
@@ -696,7 +706,8 @@ section[id] {
     transition: text-decoration-color var(--speed-fast) ease, color var(--speed-fast) ease;
 }
 
-.prose-link:hover {
+.prose-link:hover,
+.prose-link:focus-visible {
     color: color-mix(in srgb, var(--accent, var(--color-cyan)) 70%, white);
     text-decoration-color: currentColor;
 }
@@ -710,12 +721,25 @@ section[id] {
     font-weight: var(--weight-medium);
 }
 
+.prose-link.go-link {
+    transition:
+        text-decoration-color var(--speed-fast) ease,
+        text-underline-offset var(--speed-fast) ease,
+        color var(--speed-fast) ease;
+}
+
 .go-link svg {
     flex: none;
     transition: transform var(--speed-fast) ease;
 }
 
-.go-link:hover svg {
+@media (hover: hover) {
+    .go-link:hover svg {
+        transform: translateX(3px);
+    }
+}
+
+.go-link:focus-visible svg {
     transform: translateX(3px);
 }
 
@@ -870,12 +894,13 @@ section[id] {
     cursor: pointer;
     transition:
         color var(--speed-fast) ease,
-        background-color var(--speed-fast) ease;
+        background-color var(--speed-fast) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 .copy-button:hover {
     color: var(--color-ink);
-    background: rgb(195 200 230 / 0.08);
+    background: rgb(195 200 230 / 0.1);
 }
 
 .copy-button svg {
@@ -901,13 +926,28 @@ section[id] {
     transform: none;
 }
 
+@keyframes copy-ring {
+    0% {
+        box-shadow: 0 0 0 0 rgb(70 227 239 / 0.55);
+    }
+    100% {
+        box-shadow: 0 0 0 8px rgb(70 227 239 / 0);
+    }
+}
+
+html:not([data-still]) .copy-button[data-copied] {
+    animation: copy-ring 480ms cubic-bezier(0.2, 0.7, 0.2, 1) 1;
+}
+
 /* Time stopped: the arrow keeps still when pointed at, and the copy icons swap at once */
+[data-still] .prose-link.go-link,
 [data-still] .go-link svg,
+[data-still] .copy-button,
 [data-still] .copy-button svg {
     transition: none;
 }
 
-[data-still] .go-link:hover svg {
+[data-still] .go-link:is(:hover, :focus-visible) svg {
     transform: none;
 }
 

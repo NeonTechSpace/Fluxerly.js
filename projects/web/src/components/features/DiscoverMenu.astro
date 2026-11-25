@@ -9,6 +9,7 @@ import { featurePages, type FeatureSlug } from "../../lib/links"
 // click or the arrow keys open it too. Escape, moving focus away or a click outside closes the menu, and the arrow
 // keys move up and down the column. On a phone the button shows a compass and keeps its word as its name
 const current = Astro.url.pathname.replace(/\/$/, "")
+const activeFeature = featurePages.find((page) => current === `/${page.slug}`)
 
 // Each page's icon and its line for the menu, shorter than the page's own lead so the names stay the content.
 // No two lines share their key word, so the pages stay apart at a glance
@@ -26,7 +27,15 @@ const marks = {
 ---
 
 <div class="discover" data-discover>
-    <button class="trigger" type="button" aria-expanded="false" aria-controls="discover-menu" data-discover-trigger>
+    <button
+        class="trigger"
+        type="button"
+        aria-expanded="false"
+        aria-controls="discover-menu"
+        data-discover-trigger
+        data-active={activeFeature ? "" : undefined}
+        data-accent={activeFeature?.accent}
+    >
         <CompassIcon className="compass" size={22} aria-hidden="true" />
         <span class="word">Discover</span>
         <CaretDownIcon className="caret" size={14} weight="bold" aria-hidden="true" />
@@ -113,7 +122,7 @@ const marks = {
                 openedByPointer = true
                 hoverOpenedAt = performance.now()
                 open()
-            }, 50)
+            }, 110)
         }
         const pointerOut = (event: PointerEvent) => {
             if (event.pointerType === "touch") return
@@ -179,6 +188,7 @@ const marks = {
 
 <style>
     .trigger {
+        position: relative;
         display: inline-flex;
         align-items: center;
         gap: 6px;
@@ -192,12 +202,32 @@ const marks = {
         border-radius: var(--corner-small);
         corner-shape: squircle;
         cursor: pointer;
-        transition: color var(--speed-fast) ease;
+        transition:
+            color var(--speed-fast) ease,
+            scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+
+    .trigger[data-accent="cyan"] {
+        --accent: var(--color-cyan);
+    }
+
+    .trigger[data-accent="violet"] {
+        --accent: var(--color-violet);
     }
 
     .trigger:hover,
-    .trigger[aria-expanded="true"] {
+    .trigger[aria-expanded="true"],
+    .trigger[data-active] {
         color: var(--color-ink);
+    }
+
+    .trigger[data-active]::after {
+        content: "";
+        position: absolute;
+        inset: auto 2px 0;
+        height: 2px;
+        border-radius: 1px;
+        background: var(--accent, var(--color-cyan));
     }
 
     .trigger :global(.caret) {
@@ -350,6 +380,7 @@ const marks = {
     }
 
     a:focus-visible {
+        outline: 2px solid var(--accent, var(--color-cyan));
         outline-offset: -2px;
     }
 
@@ -436,7 +467,11 @@ const marks = {
         --fade: 0;
     }
 
-    :global(html[data-still]) .trigger :global(.caret) {
+    :global(html[data-still]) .trigger :global(.caret),
+    :global(html[data-still]) .mark::before,
+    :global(html[data-still]) .mark img,
+    :global(.site-header[data-instant]) .mark::before,
+    :global(.site-header[data-instant]) .mark img {
         transition: none;
     }
 
@@ -459,7 +494,7 @@ const marks = {
             top: 52px;
             left: auto;
             right: var(--frame-inline);
-            width: min(440px, calc(100vw - 2 * var(--page-margin)));
+            width: min(392px, calc(100vw - 2 * var(--page-margin)));
             height: 24px;
         }
     }
@@ -467,6 +502,10 @@ const marks = {
     @media (max-width: 640px) {
         .trigger {
             gap: 2px;
+        }
+
+        .trigger[data-active]::after {
+            inset: auto 8px 6px;
         }
 
         .trigger :global(.compass) {

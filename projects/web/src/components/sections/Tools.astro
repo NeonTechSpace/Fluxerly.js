@@ -90,18 +90,6 @@ const facts = ["Browser playground with fault injection", "Offline doctor setup 
         list-style: none;
     }
 
-
-    .item:hover .wave-mark {
-        transform: translateX(3px);
-        filter: brightness(1.3);
-    }
-
-    .wave-mark {
-        transition:
-            transform var(--speed-normal) ease,
-            filter var(--speed-normal) ease;
-    }
-
     .item {
         display: flex;
         gap: 22px;
@@ -153,15 +141,5 @@ const facts = ["Browser playground with fault injection", "Offline doctor setup 
         .item {
             gap: 16px;
         }
-    }
-
-    /* Time stopped: the marks keep still when pointed at */
-    :global(.night[data-still]) .wave-mark {
-        transition: none;
-    }
-
-    :global(.night[data-still]) .item:hover .wave-mark {
-        transform: none;
-        filter: none;
     }
 </style>

@@ -18,7 +18,7 @@
     const seenKey = "fluxerly.tour.v1"
     // The page has a moment to arrive before it darkens
     const openDelay = 1100
-    const closeTime = 260
+    const closeTime = 360
     // How far a scroll goes before the reader has clearly moved on
     const scrollAway = 24
     const pad = 4
@@ -44,11 +44,16 @@
         const catcher = tour.querySelector<HTMLElement>("[data-tour-catch]")!
         const card = tour.querySelector<HTMLElement>("[data-tour-card]")!
         let open = false
+        let done = false
         let timer = 0
+        let closeTimer = 0
         let fromY = 0
         let before: Element | null = null
 
+        const hasOpenDialog = () => document.querySelector("dialog[open]") !== null
+
         const remember = () => {
+            done = true
             try {
                 localStorage.setItem(seenKey, "1")
             } catch {
@@ -101,19 +106,43 @@
             if (Math.abs(window.scrollY - fromY) > scrollAway) close()
         }
 
-        const close = () => {
+        const onDialogClose = () => {
+            if (hasOpenDialog()) return
+            document.removeEventListener("close", onDialogClose, true)
+            if (!done && !open) show()
+        }
+
+        const dialogObserver = new MutationObserver(() => {
+            if (open && hasOpenDialog()) close(false, true)
+        })
+
+        const close = (restoreFocus = true, immediate = false) => {
             if (!open) return
             open = false
+            dialogObserver.disconnect()
             window.removeEventListener("resize", place)
             window.removeEventListener("scroll", onScroll)
             document.removeEventListener("keydown", onKey)
             tour.removeAttribute("data-on")
             if (tour.contains(document.activeElement)) (document.activeElement as HTMLElement).blur()
-            if (before instanceof HTMLElement && before !== document.body) before.focus({ preventScroll: true })
-            window.setTimeout(() => tour.hidePopover(), closeTime)
+            if (restoreFocus && before instanceof HTMLElement && before !== document.body) before.focus({ preventScroll: true })
+            window.clearTimeout(closeTimer)
+            if (immediate) {
+                if (tour.matches(":popover-open")) tour.hidePopover()
+            } else {
+                closeTimer = window.setTimeout(() => {
+                    if (!open && tour.matches(":popover-open")) tour.hidePopover()
+                }, closeTime)
+            }
         }
 
         const show = () => {
+            if (open || done) return
+            // Do not open the spotlight over an open modal dialog, wait until no dialog is open
+            if (hasOpenDialog()) {
+                document.addEventListener("close", onDialogClose, true)
+                return
+            }
             // Read down the page already, the header has gone, and the switch with it. The tip waits for it to come back
             if (header.hasAttribute("data-hidden") || toggle.getBoundingClientRect().width === 0) {
                 window.addEventListener("scroll", wait, { passive: true })
@@ -123,11 +152,14 @@
             open = true
             before = document.activeElement
             fromY = window.scrollY
+            window.clearTimeout(closeTimer)
             tour.showPopover()
             place()
+            dialogObserver.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["open"] })
             // A frame in the closed state first, so the dark and the card have somewhere to come from
             requestAnimationFrame(() => {
                 requestAnimationFrame(() => {
+                    if (!open) return
                     tour.setAttribute("data-on", "")
                     card.focus({ preventScroll: true })
                 })
@@ -142,12 +174,18 @@
             show()
         }
 
-        catcher.addEventListener("click", close)
-        card.addEventListener("click", close)
+        const onDismiss = () => {
+            if (open) close(true, true)
+        }
+        window.addEventListener("fluxerly:dismiss-tour", onDismiss)
+
+        catcher.addEventListener("click", () => close())
+        card.addEventListener("click", () => close())
         // Pressing the switch does what the tip says. There is nothing more to tell, before or after it shows
         subscribeExperience(() => {
             window.clearTimeout(timer)
             window.removeEventListener("scroll", wait)
+            document.removeEventListener("close", onDialogClose, true)
             if (open) close()
             else remember()
         })

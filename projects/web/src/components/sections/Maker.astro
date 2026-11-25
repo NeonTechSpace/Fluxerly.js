@@ -623,17 +623,23 @@ const view = chartView(downloadHistory(snapshot.days))
     }
 
     .marker {
-        background: var(--color-cyan);
+        background: var(--color-cyan-pale);
+        box-shadow:
+            0 0 0 2px #0b0e2a,
+            0 0 0 5px rgb(70 227 239 / 0.22),
+            0 0 14px 3px rgb(70 227 239 / 0.72);
     }
 
     .cross,
     .marker,
     .readout {
         visibility: hidden;
+        opacity: 0;
     }
 
     .plot[data-reading] :is(.cross, .marker, .readout) {
         visibility: visible;
+        opacity: 1;
     }
 
     .readout {
@@ -654,6 +660,23 @@ const view = chartView(downloadHistory(snapshot.days))
         border-radius: var(--corner-medium);
         corner-shape: squircle;
         pointer-events: none;
+        transition:
+            opacity var(--speed-fast) ease,
+            transform 80ms cubic-bezier(0.2, 0.7, 0.2, 1),
+            visibility 0ms linear var(--speed-fast);
+    }
+
+    .plot[data-reading] .readout {
+        transition:
+            opacity var(--speed-fast) ease,
+            transform 80ms cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+
+    :global(html[data-still]) .readout,
+    :global(html[data-still]) .plot[data-reading] .readout,
+    :global(.night[data-still]) .readout,
+    :global(.night[data-still]) .plot[data-reading] .readout {
+        transition: none;
     }
 
     .readout-count {

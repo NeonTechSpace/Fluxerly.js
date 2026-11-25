@@ -73,6 +73,15 @@
     border-radius: var(--corner-medium);
     corner-shape: squircle;
     box-shadow: var(--well-shade);
+    transition:
+        box-shadow var(--speed-fast) ease,
+        background-color var(--speed-fast) ease;
+}
+
+.ep-tools :is(input, select):hover {
+    box-shadow:
+        var(--well-shade),
+        inset 0 0 0 1px color-mix(in srgb, var(--accent) 42%, var(--hair-strong));
 }
 
 .ep-tools :is(input, select):focus-visible {
@@ -102,10 +111,6 @@
 .ep-tools option {
     color: var(--color-ink);
     background: #0b0e2e;
-}
-
-.ep-tools input::placeholder {
-    color: var(--ink-faint);
 }
 
 .ep .ep-status {
@@ -282,9 +287,14 @@
     white-space: nowrap;
     color: var(--ink-muted);
     text-decoration-color: rgb(255 255 255 / 0.28);
+    border-radius: 3px;
+    transition:
+        color var(--speed-fast) ease,
+        text-decoration-color var(--speed-fast) ease;
 }
 
-.ep .ep-docs:hover {
+.ep .ep-docs:hover,
+.ep .ep-docs:focus-visible {
     color: var(--accent-bright);
     text-decoration-color: currentColor;
 }

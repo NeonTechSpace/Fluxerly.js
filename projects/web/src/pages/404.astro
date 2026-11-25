@@ -253,7 +253,9 @@ const place = (x: number, y: number, size: number) =>
         transition:
             border-color var(--speed-normal) ease,
             background-color var(--speed-normal) ease,
-            box-shadow var(--speed-normal) ease;
+            box-shadow var(--speed-normal) ease,
+            transform var(--speed-fast) ease,
+            scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
     }
 
     .way svg {
@@ -265,9 +267,9 @@ const place = (x: number, y: number, size: number) =>
 
         color: #04101c;
         background: var(--color-cyan);
-        border-color: rgb(205 250 255 / 0.5);
+        border-color: rgb(205 250 255 / 0.55);
         box-shadow:
-            inset 0 1px 0 rgb(255 255 255 / 0.35),
+            inset 0 1px 0 rgb(255 255 255 / 0.4),
             0 12px 32px -14px rgb(70 227 239 / 0.7);
     }
 
@@ -275,11 +277,24 @@ const place = (x: number, y: number, size: number) =>
         background: #04101c;
     }
 
-    .way-home:hover {
+    @media (hover: hover) {
+        .way-home:hover {
+            background: #8ef1f7;
+            border-color: rgb(225 253 255 / 0.85);
+            transform: translateY(-2px);
+            box-shadow:
+                inset 0 1px 0 rgb(255 255 255 / 0.5),
+                0 14px 40px -10px rgb(70 227 239 / 0.92);
+        }
+    }
+
+    .way-home:focus-visible {
         background: #8ef1f7;
+        border-color: rgb(225 253 255 / 0.85);
+        transform: translateY(-2px);
         box-shadow:
-            inset 0 1px 0 rgb(255 255 255 / 0.4),
-            0 14px 36px -12px rgb(70 227 239 / 0.85);
+            inset 0 1px 0 rgb(255 255 255 / 0.5),
+            0 14px 40px -10px rgb(70 227 239 / 0.92);
     }
 
     .way-docs {
@@ -287,7 +302,7 @@ const place = (x: number, y: number, size: number) =>
 
         color: var(--color-ink);
         background: var(--glass-fill);
-        border-color: rgb(165 124 255 / 0.4);
+        border-color: rgb(165 124 255 / 0.42);
         box-shadow:
             var(--glass-highlight),
             0 24px 60px -36px rgb(0 0 0 / 0.9);
@@ -295,16 +310,95 @@ const place = (x: number, y: number, size: number) =>
 
     .way-docs svg {
         color: var(--color-violet);
+        transition: color var(--speed-fast) ease;
     }
 
-    .way-docs:hover {
-        border-color: rgb(165 124 255 / 0.75);
-        background: linear-gradient(180deg, rgb(165 124 255 / 0.14), rgb(165 124 255 / 0.06)), var(--glass-fill);
+    @media (hover: hover) {
+        .way-docs:hover {
+            border-color: rgb(195 162 255 / 0.85);
+            background: linear-gradient(180deg, rgb(165 124 255 / 0.16), rgb(165 124 255 / 0.06)), var(--glass-fill);
+            transform: translateY(-2px);
+            box-shadow:
+                inset 0 1px 0 rgb(255 255 255 / 0.18),
+                0 12px 34px -12px rgb(165 124 255 / 0.62);
+        }
+
+        .way-docs:hover svg {
+            color: var(--color-violet-pale);
+        }
+    }
+
+    .way-docs:focus-visible {
+        border-color: rgb(195 162 255 / 0.85);
+        background: linear-gradient(180deg, rgb(165 124 255 / 0.16), rgb(165 124 255 / 0.06)), var(--glass-fill);
+        transform: translateY(-2px);
+        box-shadow:
+            inset 0 1px 0 rgb(255 255 255 / 0.18),
+            0 12px 34px -12px rgb(165 124 255 / 0.62);
+    }
+
+    .way-docs:focus-visible svg {
+        color: var(--color-violet-pale);
     }
 
     .way:focus-visible {
         outline: 2px solid var(--accent);
         outline-offset: 3px;
+    }
+
+    /* Hovering the return links wakes the signal line in that link's voice */
+    .line-glow {
+        transition: stroke var(--speed-normal) ease;
+    }
+
+    .stop-halo {
+        transition: fill var(--speed-normal) ease;
+    }
+
+    .adrift-ring {
+        transition: stroke var(--speed-normal) ease;
+    }
+
+    @media (hover: hover) {
+        :global(html:not([data-still])) .lost:has(.way-home:hover) .line-glow {
+            stroke: rgb(70 227 239 / 0.56);
+        }
+
+        :global(html:not([data-still])) .lost:has(.way-home:hover) .stop-halo {
+            fill: rgb(70 227 239 / 0.26);
+        }
+
+        :global(html:not([data-still])) .lost:has(.way-docs:hover) .line-glow {
+            stroke: rgb(165 124 255 / 0.5);
+        }
+
+        :global(html:not([data-still])) .lost:has(.way-docs:hover) .stop-halo {
+            fill: rgb(165 124 255 / 0.24);
+        }
+
+        :global(html:not([data-still])) .lost:has(.way-docs:hover) .adrift-ring {
+            stroke: rgb(165 124 255 / 0.65);
+        }
+    }
+
+    :global(html:not([data-still])) .lost:has(.way-home:focus-visible) .line-glow {
+        stroke: rgb(70 227 239 / 0.56);
+    }
+
+    :global(html:not([data-still])) .lost:has(.way-home:focus-visible) .stop-halo {
+        fill: rgb(70 227 239 / 0.26);
+    }
+
+    :global(html:not([data-still])) .lost:has(.way-docs:focus-visible) .line-glow {
+        stroke: rgb(165 124 255 / 0.5);
+    }
+
+    :global(html:not([data-still])) .lost:has(.way-docs:focus-visible) .stop-halo {
+        fill: rgb(165 124 255 / 0.24);
+    }
+
+    :global(html:not([data-still])) .lost:has(.way-docs:focus-visible) .adrift-ring {
+        stroke: rgb(165 124 255 / 0.65);
     }
 
     /* The picture keeps the drawing's proportions, so the parts laid over it land where they were drawn */
@@ -516,6 +610,24 @@ const place = (x: number, y: number, size: number) =>
     .lost[data-still] .adrift,
     .lost[data-still] .signpost {
         animation: none;
+    }
+
+    .lost[data-still] .way,
+    .lost[data-still] .way-docs svg,
+    .lost[data-still] .line-glow,
+    .lost[data-still] .stop-halo,
+    .lost[data-still] .adrift-ring,
+    :global(html[data-still]) .way,
+    :global(html[data-still]) .way-docs svg,
+    :global(html[data-still]) .line-glow,
+    :global(html[data-still]) .stop-halo,
+    :global(html[data-still]) .adrift-ring {
+        transition: none;
+    }
+
+    .lost[data-still] .way:is(:hover, :focus-visible),
+    :global(html[data-still]) .way:is(:hover, :focus-visible) {
+        transform: none;
     }
 
     /* Portrait screens and phones: one centered column that reads in order, first what happened (the title and its

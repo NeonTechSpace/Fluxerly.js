@@ -51,7 +51,7 @@ const others = featurePages.filter((entry) => entry.slug !== current).toSorted((
         transition: scale var(--speed-normal) ease;
     }
 
-    :global(html:not([data-still])) .next-link:hover .next-mark {
+    :global(html:not([data-still])) .next-link:is(:hover, :focus-visible) .next-mark {
         scale: 1.1;
     }
 
@@ -90,7 +90,8 @@ const others = featurePages.filter((entry) => entry.slug !== current).toSorted((
         corner-shape: squircle;
         transition:
             background-color var(--speed-fast) ease,
-            border-color var(--speed-fast) ease;
+            border-color var(--speed-fast) ease,
+            scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
     }
 
     .next-link[data-accent="cyan"] {
@@ -101,9 +102,15 @@ const others = featurePages.filter((entry) => entry.slug !== current).toSorted((
         --accent: var(--color-violet);
     }
 
-    .next-link:hover {
+    .next-link:hover,
+    .next-link:focus-visible {
         background: rgb(160 190 255 / 0.08);
         border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    }
+
+    .next-link:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
     }
 
     /* Room for the arrow beside the title only, so the summary has the card's whole width */
@@ -131,15 +138,17 @@ const others = featurePages.filter((entry) => entry.slug !== current).toSorted((
         transition: transform var(--speed-fast) ease;
     }
 
-    .next-link:hover :global(.next-arrow) {
+    .next-link:hover :global(.next-arrow),
+    .next-link:focus-visible :global(.next-arrow) {
         transform: translateX(3px);
     }
 
+    :global(html[data-still]) .next-mark,
     :global(html[data-still]) .next-link :global(.next-arrow) {
         transition: none;
     }
 
-    :global(html[data-still]) .next-link:hover :global(.next-arrow) {
+    :global(html[data-still]) .next-link:is(:hover, :focus-visible) :global(.next-arrow) {
         transform: none;
     }
 

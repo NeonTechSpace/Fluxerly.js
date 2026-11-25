@@ -358,11 +358,23 @@ html[data-course-settling] .course-station::details-content {
     corner-shape: squircle;
     box-shadow: var(--well-shade);
     cursor: pointer;
-    transition: color var(--speed-fast) ease;
+    transition:
+        color var(--speed-fast) ease,
+        background-color var(--speed-fast) ease,
+        box-shadow var(--speed-fast) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 .search-open:hover {
     color: var(--ink-high);
+    box-shadow:
+        var(--well-shade),
+        inset 0 0 0 1px color-mix(in srgb, var(--accent) 44%, var(--hair-strong));
+}
+
+.search-open:hover kbd {
+    color: var(--ink-high);
+    background: rgb(255 255 255 / 0.1);
 }
 
 .search-open:focus-visible {
@@ -386,6 +398,9 @@ html[data-course-settling] .course-station::details-content {
     background: var(--tint);
     border-radius: var(--corner-small);
     corner-shape: squircle;
+    transition:
+        color var(--speed-fast) ease,
+        background-color var(--speed-fast) ease;
 }
 
 /* Guides or reference: two words on one hairline. The chosen part is written in white and underlined in its own
@@ -409,7 +424,9 @@ html[data-course-settling] .course-station::details-content {
     background: none;
     border: 0;
     cursor: pointer;
-    transition: color var(--speed-fast) ease;
+    transition:
+        color var(--speed-fast) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 .part-tab::after {
@@ -419,7 +436,11 @@ html[data-course-settling] .course-station::details-content {
     height: 2px;
     background: var(--tone);
     opacity: 0;
-    transition: opacity var(--speed-fast) ease;
+    transform: scaleX(0);
+    transform-origin: center;
+    transition:
+        opacity var(--speed-fast) ease,
+        transform var(--speed-normal) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 .part-tab:focus-visible {
@@ -435,6 +456,7 @@ html[data-course-settling] .course-station::details-content {
 
 .part-tab[aria-selected="true"]::after {
     opacity: 1;
+    transform: scaleX(1);
 }
 
 /* The course scrolls on its own. Its edges fade only where more of it lies beyond */
@@ -829,11 +851,21 @@ html[data-course-settling] .course-station::details-content {
 
 .crumbs a {
     color: var(--ink-muted);
-    text-decoration: none;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-decoration-color: transparent;
+    text-underline-offset: 4px;
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+    transition:
+        color var(--speed-fast) ease,
+        text-decoration-color var(--speed-fast) ease;
 }
 
-.crumbs a:hover {
+.crumbs a:hover,
+.crumbs a:focus-visible {
     color: var(--accent-bright);
+    text-decoration-color: color-mix(in srgb, var(--accent-bright) 58%, transparent);
 }
 
 .crumbs a + a::before {
@@ -866,7 +898,8 @@ html[data-course-settling] .course-station::details-content {
     cursor: pointer;
     transition:
         color var(--speed-fast) ease,
-        background-color var(--speed-fast) ease;
+        background-color var(--speed-fast) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 /* A clear layer makes the touch target 44 px without moving the text below */
@@ -878,24 +911,63 @@ html[data-course-settling] .course-station::details-content {
 
 .docs-copy-markdown:hover {
     color: var(--ink-high);
-    background: rgb(195 200 230 / 0.08);
+    background: rgb(195 200 230 / 0.1);
 }
 
 .docs-copy-markdown svg {
     grid-area: 1 / 1;
+    transition:
+        opacity var(--speed-fast) ease,
+        transform var(--speed-normal) ease;
 }
 
 .docs-copy-markdown .icon-done {
     color: var(--color-cyan);
-    visibility: hidden;
+    opacity: 0;
+    transform: scale(0.7);
 }
 
 .docs-copy-markdown[data-copied] .icon-copy {
-    visibility: hidden;
+    opacity: 0;
+    transform: scale(0.7);
 }
 
 .docs-copy-markdown[data-copied] .icon-done {
-    visibility: visible;
+    opacity: 1;
+    transform: none;
+}
+
+.docs-copy-markdown .copy-label {
+    display: inline-grid;
+    align-items: center;
+    text-align: left;
+}
+
+.docs-copy-markdown .copy-label > span {
+    grid-area: 1 / 1;
+    transition:
+        opacity var(--speed-fast) ease,
+        transform var(--speed-fast) ease;
+}
+
+.docs-copy-markdown .copy-text-done {
+    color: var(--color-cyan-light);
+    opacity: 0;
+    transform: translateY(3px);
+}
+
+.docs-copy-markdown[data-copied] .copy-text-idle {
+    opacity: 0;
+    transform: translateY(-3px);
+}
+
+.docs-copy-markdown[data-copied] .copy-text-done {
+    opacity: 1;
+    transform: none;
+}
+
+html:not([data-still]) .docs-copy-markdown[data-copied] {
+    animation: copy-ring 480ms cubic-bezier(0.2, 0.7, 0.2, 1) 1;
 }
 
 /* The title is the largest and brightest thing on the page. Its size and its light are its whole focus */
@@ -1018,7 +1090,8 @@ html[data-course-settling] .course-station::details-content {
         color var(--speed-fast) ease;
 }
 
-.docs-prose a:hover {
+.docs-prose a:hover,
+.docs-prose a:focus-visible {
     color: var(--accent-bright);
     text-decoration-color: currentColor;
 }
@@ -1065,12 +1138,24 @@ html[data-course-settling] .course-station::details-content {
     max-width: none;
 }
 
-/* A held-together span does not take its link's underline, so it draws its own. Inside a link the span takes the
-   link's hue, and its tint is that hue too */
+/* A code pill inside a link never gets sliced by an underline: the pill keeps a crisp bottom highlight that brightens on hover */
+.docs-prose a:has(> code:only-child) {
+    text-decoration: none;
+}
+
 .docs-prose a > code {
     color: inherit;
-    text-decoration: inherit;
-    background: color-mix(in srgb, currentColor 10%, transparent);
+    text-decoration: none;
+    background: color-mix(in srgb, currentColor 11%, transparent);
+    box-shadow: inset 0 -1.5px 0 color-mix(in srgb, currentColor 42%, transparent);
+    transition:
+        background-color var(--speed-fast) ease,
+        box-shadow var(--speed-fast) ease;
+}
+
+.docs-prose a:is(:hover, :focus-visible) > code {
+    background: color-mix(in srgb, currentColor 19%, transparent);
+    box-shadow: inset 0 -1.5px 0 currentColor;
 }
 
 /* Lists carry the conductor's two waves instead of bullets, and a sequence of steps carries its numbers. Both
@@ -1441,13 +1526,22 @@ html[data-course-settling] .course-station::details-content {
     display: flex;
     gap: 12px;
     align-items: baseline;
-    padding: 12px 0;
+    padding: 12px 8px;
     font-weight: var(--weight-semibold);
     color: var(--ink-high);
     list-style: none;
     cursor: pointer;
     border-radius: var(--corner-small);
     corner-shape: squircle;
+    transition:
+        color var(--speed-fast) ease,
+        background-color var(--speed-fast) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.docs-prose summary:hover {
+    color: #ffffff;
+    background: var(--tint);
 }
 
 .docs-prose summary::-webkit-details-marker {
@@ -1468,7 +1562,13 @@ html[data-course-settling] .course-station::details-content {
     border-right: 2px solid var(--accent);
     border-bottom: 2px solid var(--accent);
     transform: translateY(-3px) rotate(-45deg);
-    transition: transform var(--speed-fast) ease;
+    transition:
+        transform var(--speed-fast) ease,
+        border-color var(--speed-fast) ease;
+}
+
+.docs-prose summary:hover::before {
+    border-color: var(--accent-bright);
 }
 
 .docs-prose details[open] > summary::before {
@@ -1572,10 +1672,16 @@ html[data-course-settling] .course-station::details-content {
     background: var(--well);
     border: 0;
     border-top: 1px solid var(--hair);
+    transition:
+        color var(--speed-fast) ease,
+        background-color var(--speed-fast) ease,
+        border-color var(--speed-fast) ease;
 }
 
 .code-more:hover {
     color: var(--accent-bright);
+    background: color-mix(in srgb, var(--accent) 8%, var(--well));
+    border-top-color: color-mix(in srgb, var(--accent) 44%, var(--hair));
 }
 
 .code-more:focus-visible {
@@ -1729,7 +1835,9 @@ html[data-course-settling] .course-station::details-content {
     padding-right: 38px;
     cursor: pointer;
     list-style: none;
-    transition: box-shadow var(--speed-fast) ease;
+    transition:
+        box-shadow var(--speed-fast) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 .version-menu summary::-webkit-details-marker {
@@ -1821,11 +1929,19 @@ html[data-course-settling] .course-station::details-content {
     text-decoration: none;
     border-radius: var(--corner-small);
     corner-shape: squircle;
+    transition:
+        color var(--speed-fast) ease,
+        background-color var(--speed-fast) ease;
 }
 
 .version-list a:hover {
     color: var(--ink-high);
-    background: rgb(255 255 255 / 0.06);
+    background: rgb(255 255 255 / 0.08);
+}
+
+.version-list a:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
 }
 
 .version-list a[aria-current] {
@@ -1952,7 +2068,10 @@ html[data-course-settling] .course-station::details-content {
     border-radius: var(--corner-small);
     corner-shape: squircle;
     cursor: pointer;
-    transition: color var(--speed-fast) ease;
+    transition:
+        color var(--speed-fast) ease,
+        background-color var(--speed-fast) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 .seg button::after {
@@ -1963,11 +2082,16 @@ html[data-course-settling] .course-station::details-content {
     border-radius: 1px;
     background: var(--accent);
     opacity: 0;
-    transition: opacity var(--speed-fast) ease;
+    transform: scaleX(0);
+    transform-origin: center;
+    transition:
+        opacity var(--speed-fast) ease,
+        transform var(--speed-normal) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 .seg button:hover {
     color: var(--ink-high);
+    background: var(--tint);
 }
 
 .seg button:focus-visible {
@@ -1981,6 +2105,7 @@ html[data-course-settling] .course-station::details-content {
 
 .seg button[aria-pressed="true"]::after {
     opacity: 1;
+    transform: scaleX(1);
 }
 
 /* A command chip in the docs is a well like the code, not the homepage's glass */
@@ -2007,7 +2132,8 @@ html[data-course-settling] .course-station::details-content {
         padding: 12px 0;
     }
 
-    .search-open kbd {
+    .search-open kbd,
+    .search-keys {
         display: none;
     }
 }
@@ -2055,12 +2181,43 @@ html[data-lang="ts"] [data-lang-variant="js"] {
     box-shadow:
         inset 0 0 0 1px var(--hair),
         var(--raised-shade);
-    transition: box-shadow var(--speed-fast) ease;
+    transition:
+        box-shadow var(--speed-fast) ease,
+        transform var(--speed-fast) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
-.pager-link:hover {
+@media (hover: hover) {
+    .pager-link:hover {
+        transform: translateY(-1px);
+        box-shadow:
+            inset 0 0 0 1px var(--accent),
+            0 10px 30px -16px color-mix(in srgb, var(--accent) 45%, transparent),
+            var(--raised-shade);
+    }
+
+    .pager-link:hover .pager-dir {
+        color: var(--ink-soft);
+    }
+
+    .pager-link.next:hover .pager-dir::after {
+        transform: translateX(3px);
+    }
+
+    .pager-link:not(.next):hover .pager-dir::before {
+        transform: translateX(-3px);
+    }
+
+    .pager-link:hover .pager-title {
+        color: var(--accent-bright);
+    }
+}
+
+.pager-link:focus-visible {
+    transform: translateY(-1px);
     box-shadow:
         inset 0 0 0 1px var(--accent),
+        0 10px 30px -16px color-mix(in srgb, var(--accent) 45%, transparent),
         var(--raised-shade);
 }
 
@@ -2076,14 +2233,31 @@ html[data-lang="ts"] [data-lang-variant="js"] {
 .pager-dir {
     font-size: var(--type-small);
     color: var(--ink-muted);
+    transition: color var(--speed-fast) ease;
+}
+
+.pager-link:focus-visible .pager-dir {
+    color: var(--ink-soft);
 }
 
 .pager-link.next .pager-dir::after {
     content: " →" / "";
+    display: inline-block;
+    transition: transform var(--speed-fast) ease;
 }
 
 .pager-link:not(.next) .pager-dir::before {
     content: "← " / "";
+    display: inline-block;
+    transition: transform var(--speed-fast) ease;
+}
+
+.pager-link.next:focus-visible .pager-dir::after {
+    transform: translateX(3px);
+}
+
+.pager-link:not(.next):focus-visible .pager-dir::before {
+    transform: translateX(-3px);
 }
 
 .pager-title {
@@ -2097,7 +2271,7 @@ html[data-lang="ts"] [data-lang-variant="js"] {
     color: var(--accent);
 }
 
-.pager-link:hover .pager-title {
+.pager-link:focus-visible .pager-title {
     color: var(--accent-bright);
 }
 
@@ -2206,6 +2380,11 @@ html[data-lang="ts"] [data-lang-variant="js"] {
     corner-shape: squircle;
     box-shadow: var(--raised-shade);
     backdrop-filter: var(--raised-blur);
+    opacity: 1;
+    transform: none;
+    transition:
+        opacity var(--speed-fast) ease,
+        transform var(--speed-normal) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 .search-dialog[open] {
@@ -2213,9 +2392,40 @@ html[data-lang="ts"] [data-lang-variant="js"] {
     flex-direction: column;
 }
 
+@starting-style {
+    .search-dialog[open] {
+        opacity: 0;
+        transform: scale(0.97) translateY(-6px);
+    }
+}
+
 .search-dialog::backdrop {
     background: rgb(2 3 14 / 0.66);
     backdrop-filter: blur(3px);
+    opacity: 1;
+    transition: opacity var(--speed-fast) ease;
+}
+
+@starting-style {
+    .search-dialog[open]::backdrop {
+        opacity: 0;
+    }
+}
+
+.search-spinner {
+    flex: none;
+    width: 15px;
+    height: 15px;
+    border: 2px solid rgb(255 255 255 / 0.16);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: search-spin 700ms linear infinite;
+}
+
+@keyframes search-spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .search-field {
@@ -2288,10 +2498,70 @@ html[data-lang="ts"] [data-lang-variant="js"] {
     border-radius: var(--corner-small);
     corner-shape: squircle;
     cursor: pointer;
+    transition:
+        color var(--speed-fast) ease,
+        background-color var(--speed-fast) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 .search-close:hover {
     color: var(--ink-high);
+    background: rgb(255 255 255 / 0.13);
+}
+
+.search-empty {
+    display: grid;
+    gap: 12px;
+    padding: 16px 20px 18px;
+}
+
+.search-empty-label {
+    margin: 0;
+    font-size: var(--type-small);
+    font-weight: var(--weight-medium);
+    color: var(--ink-muted);
+}
+
+.search-picks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.search-pick {
+    min-height: 44px;
+    padding: 0 14px;
+    font: inherit;
+    font-size: var(--type-small);
+    font-weight: var(--weight-medium);
+    color: var(--ink-soft);
+    background: var(--tint);
+    border: 1px solid rgb(255 255 255 / 0.12);
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    cursor: pointer;
+    transition:
+        color var(--speed-fast) ease,
+        background-color var(--speed-fast) ease,
+        border-color var(--speed-fast) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.search-pick:hover {
+    color: var(--ink-high);
+    background: rgb(255 255 255 / 0.11);
+    border-color: color-mix(in srgb, var(--accent) 48%, transparent);
+}
+
+.search-pick:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.search-keys {
+    margin: 0;
+    font-size: var(--type-small);
+    color: var(--ink-faint);
 }
 
 .search-results {
@@ -2463,10 +2733,22 @@ html[data-lang="ts"] [data-lang-variant="js"] {
     font-size: var(--type-small);
     color: var(--ink-high);
     background: var(--tint);
-    border: 0;
+    border: 1px solid transparent;
     border-radius: var(--corner-small);
     corner-shape: squircle;
     cursor: pointer;
+    transition:
+        color var(--speed-fast) ease,
+        background-color var(--speed-fast) ease,
+        border-color var(--speed-fast) ease,
+        scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.search-retry:hover,
+.search-again:hover {
+    color: #ffffff;
+    background: rgb(255 255 255 / 0.13);
+    border-color: color-mix(in srgb, var(--accent) 48%, transparent);
 }
 
 /* The note's button keeps to one line inside the dialog */
@@ -2498,7 +2780,7 @@ html[data-lang="ts"] [data-lang-variant="js"] {
         display: flex;
         gap: 12px;
         align-items: center;
-        padding: 12px 0;
+        padding: 12px 8px;
         font-size: var(--type-small);
         font-weight: var(--weight-semibold);
         color: var(--ink-high);
@@ -2506,6 +2788,15 @@ html[data-lang="ts"] [data-lang-variant="js"] {
         cursor: pointer;
         border-radius: var(--corner-small);
         corner-shape: squircle;
+        transition:
+            color var(--speed-fast) ease,
+            background-color var(--speed-fast) ease,
+            scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+
+    .toc-fold summary:hover {
+        color: #ffffff;
+        background: var(--tint);
     }
 
     .toc-fold summary:focus-visible {
@@ -2526,7 +2817,13 @@ html[data-lang="ts"] [data-lang-variant="js"] {
         border-right: 2px solid var(--accent);
         border-bottom: 2px solid var(--accent);
         transform: rotate(-45deg);
-        transition: transform var(--speed-fast) ease;
+        transition:
+            transform var(--speed-fast) ease,
+            border-color var(--speed-fast) ease;
+    }
+
+    .toc-fold summary:hover::before {
+        border-color: var(--accent-bright);
     }
 
     .toc-fold[open] > summary::before {
@@ -2665,6 +2962,17 @@ html[data-lang="ts"] [data-lang-variant="js"] {
         border-radius: var(--corner-medium);
         corner-shape: squircle;
         cursor: pointer;
+        transition:
+            color var(--speed-fast) ease,
+            background-color var(--speed-fast) ease,
+            border-color var(--speed-fast) ease,
+            scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+
+    .side-close:hover {
+        color: var(--ink-high);
+        background: var(--tint);
+        border-color: color-mix(in srgb, var(--accent) 55%, var(--hair-strong));
     }
 
     /* The menu button is a quiet outline the width of the column, over the outline fold's row */
@@ -2684,6 +2992,19 @@ html[data-lang="ts"] [data-lang-variant="js"] {
         border-radius: var(--corner-medium);
         corner-shape: squircle;
         cursor: pointer;
+        transition:
+            background-color var(--speed-fast) ease,
+            border-color var(--speed-fast) ease,
+            scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+
+    .side-open:hover {
+        background: var(--tint);
+        border-color: color-mix(in srgb, var(--accent) 55%, var(--hair-strong));
+    }
+
+    .side-open:hover svg {
+        color: var(--ink-high);
     }
 
     .side-open:focus-visible {
@@ -2693,6 +3014,7 @@ html[data-lang="ts"] [data-lang-variant="js"] {
 
     .side-open svg {
         color: var(--ink-muted);
+        transition: color var(--speed-fast) ease;
     }
 
     .docs-main {
@@ -2790,16 +3112,50 @@ html[data-arrive] .docs-article {
 .docs[data-still] .docs-side,
 .docs[data-still] .docs-side[data-open],
 .docs[data-still] .docs-outline,
+.docs[data-still] .docs-main,
 .docs[data-still] .side-scrim,
 .docs[data-still] .station-caret,
 .docs[data-still] .course-station::details-content,
 .docs[data-still] .course[data-travel="go"] .bead,
-.docs[data-still] .course[data-travel="go"] .signal {
+.docs[data-still] .course[data-travel="go"] .signal,
+.docs[data-still] .docs-prose summary::before,
+.docs[data-still] .toc-fold summary::before,
+.docs[data-still] .part-tab::after,
+.docs[data-still] .seg button::after,
+.docs[data-still] .pager-link,
+.docs[data-still] .pager-dir::before,
+.docs[data-still] .pager-dir::after,
+.docs[data-still] .docs-copy-markdown svg,
+.docs[data-still] .docs-copy-markdown .copy-label > span,
+html[data-still] .docs-main,
+html[data-still] .docs-prose summary::before,
+html[data-still] .toc-fold summary::before,
+html[data-still] .part-tab::after,
+html[data-still] .seg button::after,
+html[data-still] .pager-link,
+html[data-still] .pager-dir::before,
+html[data-still] .pager-dir::after,
+html[data-still] .docs-copy-markdown svg,
+html[data-still] .docs-copy-markdown .copy-label > span,
+html[data-still] .search-dialog,
+html[data-still] .search-dialog::backdrop {
     transition: none;
 }
 
+.docs[data-still] .pager-link:is(:hover, :focus-visible),
+html[data-still] .pager-link:is(:hover, :focus-visible),
+.docs[data-still] .pager-link:is(:hover, :focus-visible) .pager-dir::before,
+.docs[data-still] .pager-link:is(:hover, :focus-visible) .pager-dir::after,
+html[data-still] .pager-link:is(:hover, :focus-visible) .pager-dir::before,
+html[data-still] .pager-link:is(:hover, :focus-visible) .pager-dir::after,
+html[data-still] .search-dialog {
+    transform: none;
+}
+
 .docs[data-still] .course-list a[data-pending]::before,
-.docs[data-still] .course[data-switched] {
+.docs[data-still] .course[data-switched],
+.docs[data-still] .search-spinner,
+html[data-still] .search-spinner {
     animation: none;
 }
 

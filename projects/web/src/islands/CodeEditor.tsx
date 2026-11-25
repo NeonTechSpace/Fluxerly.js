@@ -32,7 +32,7 @@ import { playgroundTsClient } from "./ts-client"
 
 const fluxerlyHighlight = HighlightStyle.define([
     { tag: [tags.comment, tags.lineComment, tags.blockComment], color: "#8089b3", fontStyle: "italic" },
-    { tag: [tags.keyword, tags.controlKeyword, tags.operatorKeyword, tags.definitionKeyword, tags.moduleKeyword, tags.self], color: "#b490ff" },
+    { tag: [tags.keyword, tags.controlKeyword, tags.operatorKeyword, tags.definitionKeyword, tags.moduleKeyword, tags.self], color: "#b597ff" },
     { tag: [tags.operator, tags.punctuation, tags.separator, tags.bracket, tags.brace, tags.paren], color: "#8d94bb" },
     { tag: [tags.string, tags.special(tags.string)], color: "#ecc46e" },
     { tag: [tags.escape, tags.regexp], color: "#f8dfa0" },
@@ -54,12 +54,18 @@ const fluxerlyEditorTheme = EditorView.theme(
         },
         ".cm-scroller": {
             fontFamily: "var(--font-mono)",
+            fontVariantLigatures: "none",
+            fontFeatureSettings: '"calt" 0, "liga" 0',
             lineHeight: "1.6",
             overflow: "auto",
+            scrollbarWidth: "thin",
+            scrollbarColor: "rgb(160 190 255 / 0.25) transparent",
         },
         ".cm-content": {
             padding: "14px 12px 18px 6px",
             caretColor: "#46e3ef",
+            fontVariantLigatures: "none",
+            fontFeatureSettings: '"calt" 0, "liga" 0',
         },
         ".cm-gutters": {
             backgroundColor: "#050820",
@@ -94,6 +100,7 @@ const fluxerlyEditorTheme = EditorView.theme(
             backgroundColor: "#0d1131",
             border: "1px solid rgb(160 190 255 / 0.28)",
             borderRadius: "var(--corner-medium)",
+            cornerShape: "squircle",
             color: "#eef0ff",
             boxShadow: "0 16px 40px -12px rgb(2 3 15 / 0.85)",
         },
@@ -286,7 +293,8 @@ function buildDiagnosticHoverNode(
 }
 
 export interface CodeEditorJumpTarget {
-    readonly offset: number
+    readonly offset?: number
+    readonly line?: number
     readonly seq: number
 }
 
@@ -576,7 +584,13 @@ export default function CodeEditor({
         if (!jumpToOffset) return
         const view = viewRef.current
         if (!view) return
-        const pos = Math.max(0, Math.min(jumpToOffset.offset, view.state.doc.length))
+        let pos: number
+        if (jumpToOffset.line !== undefined) {
+            const lineNumber = Math.max(1, Math.min(jumpToOffset.line, view.state.doc.lines))
+            pos = view.state.doc.line(lineNumber).from
+        } else {
+            pos = Math.max(0, Math.min(jumpToOffset.offset ?? 0, view.state.doc.length))
+        }
         view.focus()
         view.dispatch({
             selection: { anchor: pos },

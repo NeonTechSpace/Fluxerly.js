@@ -141,9 +141,13 @@ function brief(text: string, typed = text) {
 // A note button's spoken name: Its visible label first, then the whole query when the label shows only part of it
 const spoken = (label: string, query: string) => (label.includes(query) ? undefined : `${label}, ${query}`)
 
+const quickPicks = ["Quick Start", "Commands", "Messages", "Rate Limits"] as const
+
 export default function DocsSearch() {
     const dialog = useRef<HTMLDialogElement>(null)
     const input = useRef<HTMLInputElement>(null)
+    const backdropDownRef = useRef(false)
+    const lastPointerRef = useRef<{ x: number; y: number } | null>(null)
     const [query, setQuery] = useState("")
     const [hits, setHits] = useState<Hit[]>([])
     // How search read the answered query: A typo it corrected or a correction it only suggests
@@ -172,6 +176,9 @@ export default function DocsSearch() {
 
     const open = () => {
         if (!dialog.current || dialog.current.open) return
+        lastPointerRef.current = null
+        // Dismiss any active first-visit spotlight synchronously first so the dialog remembers the original focus target
+        window.dispatchEvent(new Event("fluxerly:dismiss-tour"))
         dialog.current.showModal()
         input.current?.select()
         if (state === "idle") start(loadPagefind())
@@ -194,7 +201,8 @@ export default function DocsSearch() {
         const onKey = (event: globalThis.KeyboardEvent) => {
             if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
                 event.preventDefault()
-                openRef.current()
+                if (dialog.current?.open) dialog.current.close()
+                else openRef.current()
             }
         }
         const onHash = () => dialog.current?.close()
@@ -282,10 +290,12 @@ export default function DocsSearch() {
         // A search field's own Escape would only clear the query. Escape leaves search, as the Esc button does
         if (event.key === "Escape") {
             event.preventDefault()
+            event.stopPropagation()
             dialog.current?.close()
         } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             event.preventDefault()
             if (!hits.length) return
+            lastPointerRef.current = null
             const step = event.key === "ArrowDown" ? 1 : -1
             const next = (active + step + hits.length) % hits.length
             setActive(next)
@@ -296,17 +306,26 @@ export default function DocsSearch() {
         }
     }
 
+    const onDialogKeyDown = (event: KeyboardEvent<HTMLDialogElement>) => {
+        if (event.key !== "Escape" || composing(event.nativeEvent)) return
+        event.preventDefault()
+        event.stopPropagation()
+        dialog.current?.close()
+    }
+
+    const trimmed = query.trim()
+    const searching = state === "loading" || (state === "ready" && searchable(trimmed) && answered !== trimmed)
     const message =
         state === "unavailable"
             ? "Search could not load. Check the connection and try again"
             : state === "loading"
               ? "Opening the index"
-              : searchable(query.trim()) && answered === query.trim() && !hits.length && !reading.suggestion
-                ? `Nothing found for “${query.trim()}”`
+              : searchable(trimmed) && answered === trimmed && !hits.length && !reading.suggestion
+                ? `Nothing found for “${trimmed}”`
                 : ""
     // The note above the results, where a phone's keyboard does not hide it: A corrected typo with a way back to the
     // query as typed, or a correction search only suggests
-    const shown = answered === query.trim() && state === "ready"
+    const shown = answered === trimmed && state === "ready"
     // The query as read stands out from the muted note, so a one-letter correction is not missed. A long query, such as a
     // pasted log line, shows only part of it, so the note stays short and the first result stays in view on a phone. Each
     // button's spoken name also holds the whole query it searches
@@ -343,9 +362,21 @@ export default function DocsSearch() {
                 ref={dialog}
                 className="search-dialog"
                 aria-label="Search the docs"
-                onClose={() => enter.clear()}
+                onKeyDown={onDialogKeyDown}
+                onCancel={(event) => {
+                    event.preventDefault()
+                    dialog.current?.close()
+                }}
+                onClose={() => {
+                    enter.clear()
+                    backdropDownRef.current = false
+                }}
+                onPointerDown={(event) => {
+                    backdropDownRef.current = event.target === dialog.current
+                }}
                 onClick={(event) => {
-                    if (event.target === dialog.current) dialog.current.close()
+                    if (backdropDownRef.current && event.target === dialog.current) dialog.current.close()
+                    backdropDownRef.current = false
                 }}
             >
                 <div className="search-field">
@@ -368,6 +399,7 @@ export default function DocsSearch() {
                         autoComplete="off"
                         spellCheck={false}
                     />
+                    {searching && <span className="search-spinner" aria-hidden="true" />}
                     {query && (
                         <button className="search-clear" type="button" aria-label="Clear Search" onClick={clearQuery}>
                             <XIcon size={18} weight="bold" aria-hidden="true" />
@@ -381,9 +413,37 @@ export default function DocsSearch() {
                 <div className="search-notes" role="status">
                     {note}
                 </div>
+                {!trimmed && state !== "unavailable" && (
+                    <div className="search-empty">
+                        <p className="search-empty-label">Popular Topics</p>
+                        <div className="search-picks">
+                            {quickPicks.map((topic) => (
+                                <button key={topic} type="button" className="search-pick" onClick={() => searchFor(topic, false)}>
+                                    {topic}
+                                </button>
+                            ))}
+                        </div>
+                        <p className="search-keys">Arrow keys to move · Enter to open · Esc to close</p>
+                    </div>
+                )}
                 <ul className="search-results" id={listId} role="listbox" aria-label="Results">
                     {hits.map((hit, index) => (
-                        <li key={hit.url} id={`${listId}-${index}`} role="option" aria-selected={index === active} onMouseMove={() => setActive(index)}>
+                        <li
+                            key={hit.url}
+                            id={`${listId}-${index}`}
+                            role="option"
+                            aria-selected={index === active}
+                            onPointerMove={(event) => {
+                                const previous = lastPointerRef.current
+                                if (!previous) {
+                                    lastPointerRef.current = { x: event.clientX, y: event.clientY }
+                                    return
+                                }
+                                if (Math.hypot(event.clientX - previous.x, event.clientY - previous.y) < 2) return
+                                lastPointerRef.current = { x: event.clientX, y: event.clientY }
+                                setActive(index)
+                            }}
+                        >
                             <a href={hit.url} tabIndex={-1} onClick={(event) => onHitClick(event, hit.url)}>
                                 <span className="search-hit-head">
                                     <span className="search-hit-title">

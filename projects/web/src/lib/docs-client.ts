@@ -90,9 +90,9 @@ function setCodeOpen(frame: Element, open: boolean) {
 
 // While the site moves, the rest of a long block unrolls instead of appearing at once. Closing pulls the button up, so the page
 // follows to keep it where the reader's finger is. Opening leaves the reader at the line they were on
-let codeSliding = false
+const slidingFrames = new WeakSet<Element>()
 function slideCode(frame: Element, button: HTMLElement, open: boolean) {
-    if (codeSliding) return
+    if (slidingFrames.has(frame)) return
     const rest = [...frame.querySelectorAll<HTMLElement>(".code-rest")].find((element) => element.closest("pre")?.checkVisibility())
     if (still() || !rest) {
         if (open) setCodeOpen(frame, true)
@@ -105,7 +105,7 @@ function slideCode(frame: Element, button: HTMLElement, open: boolean) {
         { height: open ? ["0px", `${height}px`] : [`${height}px`, "0px"], overflow: ["clip", "clip"] },
         { duration: Math.min(900, 320 + height / 4), easing: "cubic-bezier(0.35, 0, 0.65, 1)", fill: "both" },
     )
-    codeSliding = true
+    slidingFrames.add(frame)
     if (!open) {
         button.setAttribute("aria-expanded", "false")
         let top = button.getBoundingClientRect().top
@@ -121,7 +121,7 @@ function slideCode(frame: Element, button: HTMLElement, open: boolean) {
     void motion.finished
         .catch(() => {})
         .then(() => {
-            codeSliding = false
+            slidingFrames.delete(frame)
             if (open) motion.cancel()
             else
                 keepInPlace(button, () => {
@@ -335,6 +335,8 @@ document.addEventListener("click", (event) => {
     const heading = document.getElementById(decodeURIComponent(link.hash.slice(1)))
     if (!heading) return
     event.preventDefault()
+    const fold = link.closest<HTMLDetailsElement>(".toc-fold")
+    if (fold) fold.open = false
     const smooth = !still()
     root.style.scrollBehavior = smooth ? "smooth" : "auto"
     // The same address again is not a navigation, so the heading is scrolled to directly
