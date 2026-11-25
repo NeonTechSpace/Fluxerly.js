@@ -8,6 +8,7 @@ import {
     buildTriageLaunchPrompt,
     findCommandOnPath,
     matchTriageAgentAnswer,
+    matchTriagePickerAnswer,
     parseTriageArguments,
     redactHomePath,
     runTriage,
@@ -136,9 +137,46 @@ describe("fluxerly triage playbook, argument parsing and helpers", () => {
                 print: true,
             },
         })
+        expect(parseTriageArguments(["--agent", "opencode", "--model", "openai/gpt-5"])).toEqual({
+            ok: true,
+            options: {
+                agent: "opencode",
+                model: "openai/gpt-5",
+                dir: undefined,
+                log: undefined,
+                run: undefined,
+                problem: undefined,
+                print: false,
+            },
+        })
+        expect(parseTriageArguments(["--agent", "t3"])).toEqual({
+            ok: true,
+            options: {
+                agent: "t3code",
+                model: undefined,
+                dir: undefined,
+                log: undefined,
+                run: undefined,
+                problem: undefined,
+                print: false,
+            },
+        })
+        expect(parseTriageArguments(["--agent", "other"])).toEqual({
+            ok: true,
+            options: {
+                agent: "other",
+                model: undefined,
+                dir: undefined,
+                log: undefined,
+                run: undefined,
+                problem: undefined,
+                print: false,
+            },
+        })
         for (const bad of [
             ["--agent", "unknown"],
             ["--print", "--agent", "codex"],
+            ["--agent", "other", "--model", "x"],
             ["--model"],
             ["--log"],
             ["--run"],
@@ -155,7 +193,12 @@ describe("fluxerly triage playbook, argument parsing and helpers", () => {
         expect(matchTriageAgentAnswer(triageAgents, "1")?.id).toBe("claude")
         expect(matchTriageAgentAnswer(triageAgents, "codex")?.id).toBe("codex")
         expect(matchTriageAgentAnswer(triageAgents, "agy")?.id).toBe("antigravity")
+        expect(matchTriageAgentAnswer(triageAgents, "opencode")?.id).toBe("opencode")
+        expect(matchTriageAgentAnswer(triageAgents, "t3")?.id).toBe("t3code")
         expect(matchTriageAgentAnswer(triageAgents, "9")).toBeUndefined()
+        expect(matchTriagePickerAnswer(triageAgents, String(triageAgents.length + 1))).toBe("other")
+        expect(matchTriagePickerAnswer(triageAgents, "other")).toBe("other")
+        expect(matchTriagePickerAnswer(triageAgents, "0")).toBe("other")
         expect(findCommandOnPath("codex", { PATH: "" }, "linux")).toBeUndefined()
     })
 })
@@ -326,6 +369,116 @@ describe("fluxerly triage execution modes", () => {
         ).toBe(1)
         expect(failOut.read()).toContain("~/.custom-codex")
         expect(failOut.read()).toContain("CODEX_HOME")
+    })
+
+    test("supports OpenCode, T3 Code, --agent other and choosing Other in an interactive TTY picker", async () => {
+        const project = makeBotProject()
+        const sessions = makeTempDir("fluxerly-triage-harnesses-")
+
+        // OpenCode launches interactive TUI with --prompt and optional --model
+        const opencodeCalls: TriageSpawnRequest[] = []
+        expect(
+            await runTriage(["--agent", "opencode", "--model", "anthropic/claude-sonnet"], {
+                project,
+                packageRoot: sdkRoot,
+                input: new PassThrough(),
+                output: captureStream().stream,
+                errorOutput: captureStream().stream,
+                env: {},
+                platform: "linux",
+                sessionRoot: sessions,
+                detectCommand: (cmd) => (cmd === "opencode" ? "/usr/local/bin/opencode" : undefined),
+                spawnSession: async (request) => {
+                    opencodeCalls.push(request)
+                    return 0
+                },
+            }),
+        ).toBe(0)
+        expect(opencodeCalls).toHaveLength(1)
+        expect(opencodeCalls[0]!.command).toBe("/usr/local/bin/opencode")
+        expect(opencodeCalls[0]!.args.slice(0, 3)).toEqual(["--model", "anthropic/claude-sonnet", "--prompt"])
+
+        // T3 Code launches `t3 thread start --title "Fluxerly triage" [--model ...] <project> <prompt>`
+        const t3Calls: TriageSpawnRequest[] = []
+        expect(
+            await runTriage(["--agent", "t3", "--model", "gpt-6.2-sol", "403 on reply"], {
+                project,
+                packageRoot: sdkRoot,
+                input: new PassThrough(),
+                output: captureStream().stream,
+                errorOutput: captureStream().stream,
+                env: {},
+                platform: "linux",
+                sessionRoot: sessions,
+                detectCommand: (cmd) => (cmd === "t3" ? "/usr/local/bin/t3" : undefined),
+                spawnSession: async (request) => {
+                    t3Calls.push(request)
+                    return 0
+                },
+            }),
+        ).toBe(0)
+        expect(t3Calls).toHaveLength(1)
+        expect(t3Calls[0]!.command).toBe("/usr/local/bin/t3")
+        expect(t3Calls[0]!.args.slice(0, 7)).toEqual([
+            "thread",
+            "start",
+            "--title",
+            "Fluxerly triage",
+            "--model",
+            "gpt-6.2-sol",
+            project,
+        ])
+        expect(t3Calls[0]!.args[7]).toContain("triage-prompt.md")
+
+        // --agent other skips spawning detected CLIs and prints harness-agnostic prompt and session files
+        const otherOut = captureStream()
+        const skippedCalls: TriageSpawnRequest[] = []
+        expect(
+            await runTriage(["--agent", "other"], {
+                project,
+                packageRoot: sdkRoot,
+                input: new PassThrough(),
+                output: otherOut.stream,
+                errorOutput: captureStream().stream,
+                env: {},
+                platform: "linux",
+                sessionRoot: sessions,
+                detectCommand: (cmd) => (cmd === "claude" ? "/bin/claude" : undefined),
+                spawnSession: async (request) => {
+                    skippedCalls.push(request)
+                    return 0
+                },
+            }),
+        ).toBe(0)
+        expect(skippedCalls).toHaveLength(0)
+        expect(otherOut.read()).toContain("Use any coding agent")
+        expect(otherOut.read()).toContain("triage-prompt.md")
+
+        // Interactive TTY picker offers Other even when only one CLI is installed
+        const singleTtyIn = new PassThrough() as PassThrough & { isTTY?: boolean }
+        singleTtyIn.isTTY = true
+        singleTtyIn.end("2\n")
+        const singleTtyOut = captureStream({ isTTY: true, columns: 80, rows: 24, depth: 4 })
+        expect(
+            await runTriage([], {
+                project,
+                packageRoot: sdkRoot,
+                input: singleTtyIn,
+                output: singleTtyOut.stream,
+                errorOutput: captureStream().stream,
+                env: {},
+                platform: "linux",
+                sessionRoot: sessions,
+                detectCommand: (cmd) => (cmd === "codex" ? "/bin/codex" : undefined),
+                spawnSession: async (request) => {
+                    skippedCalls.push(request)
+                    return 0
+                },
+            }),
+        ).toBe(0)
+        expect(skippedCalls).toHaveLength(0)
+        expect(singleTtyOut.read()).toContain("Other coding agent")
+        expect(singleTtyOut.read()).toContain("triage-prompt.md")
     })
 
     test("--run executes the command with FLUXERLY_DEBUG, masks secrets, writes triage-trace.log and survives non-zero exit", async () => {

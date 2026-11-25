@@ -12,6 +12,8 @@ repobeats
 # Development tools
 bunx
 journalctl
+opencode
+t3code
 tsgolint
 unpatch
 zizmor

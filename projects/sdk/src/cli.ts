@@ -68,7 +68,10 @@ const optionGroups: readonly {
         heading: "Options for triage:",
         rows: [
             ["[problem]", "Optional short description of what went wrong to pass into triage context"],
-            ["--agent claude|codex|antigravity", "Chooses which installed coding agent CLI to start"],
+            [
+                "--agent claude|codex|antigravity|opencode|t3code|other",
+                "Chooses which coding agent CLI to start, or other for a harness-agnostic prompt",
+            ],
             ["--model <id>", "Passes a model identifier through to the chosen agent CLI"],
             ["--dir <folder>", "Targets a bot project folder other than the current directory"],
             ["--log <file>", "Includes a redacted tail (up to 16 KB) of a local log file in triage context"],

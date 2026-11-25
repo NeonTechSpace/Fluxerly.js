@@ -136,7 +136,7 @@ Every `@neontechspace/fluxerly` install ships the `fluxerly` CLI with zero extra
 | --- | --- | --- |
 | `fluxerly init` | Creates a JavaScript, TypeScript or Effect starter bot with a working `createTestBot` test and `AGENTS.md`, then installs dependencies | `--template js\|ts\|effect`, `--dir <folder>`, `--pm npm\|pnpm\|bun`, `--no-install` |
 | `fluxerly doctor` | Verifies runtime, ESM, TypeScript, Effect, installed dependencies, source imports and secret hygiene offline | `--json` |
-| `fluxerly triage` | Bundles redacted project facts, doctor checks, optional logs or debug traces and the triage playbook for a coding agent | `[problem]`, `--agent claude\|codex\|antigravity`, `--model <id>`, `--dir <folder>`, `--log <file>`, `--run <command>`, `--print` |
+| `fluxerly triage` | Bundles redacted project facts, doctor checks, optional logs or debug traces and the triage playbook for a coding agent | `[problem]`, `--agent claude\|codex\|antigravity\|opencode\|t3code\|other`, `--model <id>`, `--dir <folder>`, `--log <file>`, `--run <command>`, `--print` |
 | `fluxerly agents` | Writes, refreshes or checks Fluxerly rules for coding agents across `AGENTS.md`, skills and IDE rule files | `--target agents\|skill\|cursor\|claude\|gemini\|all`, `--check`, `--print` |
 | `fluxerly invite` | Generates a Fluxer bot installation URL offline from an application ID and permission names or bitfield | `<applicationId>`, `--permissions <value>` |
 
@@ -167,7 +167,7 @@ npx --no fluxerly triage --run "npm test" "replies fail with 403"
 
 - **Automatic context:** Collects SDK and CLI versions, pinned Fluxer server commit, shipped `src/` paths and `doctor` results, plus optional `--log` tails or live `FLUXERLY_DEBUG=rest,gateway` traces from `--run`
 - **Three fault layers:** Reads shipped TypeScript source inside `node_modules/@neontechspace/fluxerly/src` and verifies with `createTestBot` to separate bot code, Fluxer permissions and real SDK bugs
-- **Any coding agent:** Launches Claude Code, Codex or Antigravity in a terminal, or prints the full redacted brief with `--print` for any agent or chat session
+- **Any coding agent:** Launches Claude Code, Codex, Antigravity, OpenCode or T3 Code, or hands off a harness-agnostic prompt and session files via the picker's Other option, `--agent other` or `--print`
 - **Safe by default:** Never reads `.env`, masks tokens and home paths automatically, and asks before editing files or opening an issue
 
 <p align="center">

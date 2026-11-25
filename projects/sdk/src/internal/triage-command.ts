@@ -1,8 +1,8 @@
 /**
- * Runs `fluxerly triage [--agent claude|codex|antigravity] [--model <id>] [--dir <folder>] [--print]`.
- * Collects redacted project and SDK facts alongside Fluxerly's triage playbook and either prints them for any
- * coding agent or starts an installed terminal coding agent (Claude Code, Codex or Antigravity) inside the bot
- * project to diagnose whether an issue belongs to project code, Fluxer or `@neontechspace/fluxerly`
+ * Runs `fluxerly triage [--agent claude|codex|antigravity|opencode|t3code|other] [--model <id>] [--dir <folder>] [--print]`.
+ * Collects redacted project and SDK facts alongside Fluxerly's triage playbook and either prints a harness-agnostic
+ * prompt and session files for any coding agent or starts a detected CLI (Claude Code, Codex, Antigravity, OpenCode
+ * or T3 Code) inside the bot project to diagnose whether an issue belongs to project code, Fluxer or `@neontechspace/fluxerly`
  */
 
 import { spawn } from "node:child_process"
@@ -23,7 +23,14 @@ import { createCliTheme, type CliStreamLike } from "./cli-theme.js"
 import { collectProjectFacts, type DoctorStatus, type ProjectFacts } from "./doctor-command.js"
 import { maskText, maskedMessage } from "./masking.js"
 
-export type TriageAgentId = "claude" | "codex" | "antigravity"
+export type TriageAgentId = "claude" | "codex" | "antigravity" | "opencode" | "t3code"
+export type TriageAgentOption = TriageAgentId | "other"
+
+export interface TriageAgentArgsContext {
+    readonly launchPrompt: string
+    readonly model?: string | undefined
+    readonly targetProject: string
+}
 
 export interface TriageAgentSpec {
     readonly id: TriageAgentId
@@ -31,7 +38,9 @@ export interface TriageAgentSpec {
     readonly label: string
     readonly stateDirEnv: string
     readonly defaultStateDir: string
+    readonly aliases?: readonly string[]
     readonly promptArgs?: readonly string[]
+    readonly buildArgs?: (context: TriageAgentArgsContext) => readonly string[]
 }
 
 export const triageAgents: readonly TriageAgentSpec[] = Object.freeze([
@@ -57,10 +66,35 @@ export const triageAgents: readonly TriageAgentSpec[] = Object.freeze([
         defaultStateDir: ".gemini",
         promptArgs: ["--prompt-interactive"],
     },
+    {
+        id: "opencode",
+        command: "opencode",
+        label: "OpenCode",
+        stateDirEnv: "OPENCODE_CONFIG_DIR",
+        defaultStateDir: ".config/opencode",
+        promptArgs: ["--prompt"],
+    },
+    {
+        id: "t3code",
+        command: "t3",
+        label: "T3 Code",
+        stateDirEnv: "T3CODE_HOME",
+        defaultStateDir: ".t3",
+        aliases: ["t3"],
+        buildArgs: ({ launchPrompt, model, targetProject }) => [
+            "thread",
+            "start",
+            "--title",
+            "Fluxerly triage",
+            ...(model === undefined ? [] : ["--model", model]),
+            targetProject,
+            launchPrompt,
+        ],
+    },
 ])
 
 export interface TriageOptions {
-    readonly agent?: TriageAgentId | undefined
+    readonly agent?: TriageAgentOption | undefined
     readonly model?: string | undefined
     readonly dir?: string | undefined
     readonly log?: string | undefined
@@ -119,13 +153,20 @@ export interface TriageEnvironment {
     ) => Promise<TriageTraceResult>
 }
 
-const agentIds = new Set<string>(triageAgents.map((agent) => agent.id))
+const agentAliases = new Map<string, TriageAgentOption>([
+    ...triageAgents.flatMap((agent): [string, TriageAgentOption][] => [
+        [agent.id, agent.id],
+        ...(agent.aliases ?? []).map((alias): [string, TriageAgentOption] => [alias, agent.id]),
+    ]),
+    ["other", "other"],
+    ["any", "other"],
+])
 
 /** Parse `fluxerly triage` CLI arguments and return either validated options or a specific 1-line error */
 export function parseTriageArguments(
     args: readonly string[],
 ): { readonly ok: true; readonly options: TriageOptions } | { readonly ok: false; readonly message: string } {
-    let agent: TriageAgentId | undefined
+    let agent: TriageAgentOption | undefined
     let model: string | undefined
     let dir: string | undefined
     let log: string | undefined
@@ -151,14 +192,17 @@ export function parseTriageArguments(
             if (agent !== undefined) return { ok: false, message: "The --agent option was passed more than once" }
             const value = args[++index]
             if (!value || value.startsWith("-"))
-                return { ok: false, message: "The --agent option requires claude, codex or antigravity" }
-            const normalized = value.toLowerCase()
-            if (!agentIds.has(normalized))
                 return {
                     ok: false,
-                    message: `Unsupported --agent value "${value}". Supported agents are claude, codex and antigravity`,
+                    message: "The --agent option requires claude, codex, antigravity, opencode, t3code or other",
                 }
-            agent = normalized as TriageAgentId
+            const resolved = agentAliases.get(value.toLowerCase())
+            if (resolved === undefined)
+                return {
+                    ok: false,
+                    message: `Unsupported --agent value "${value}". Supported agents are claude, codex, antigravity, opencode, t3code and other`,
+                }
+            agent = resolved
         } else if (arg === "--model") {
             if (model !== undefined) return { ok: false, message: "The --model option was passed more than once" }
             const value = args[++index]
@@ -193,6 +237,8 @@ export function parseTriageArguments(
 
     if (print && (agent !== undefined || model !== undefined))
         return { ok: false, message: "The --print option cannot be combined with --agent or --model" }
+    if (agent === "other" && model !== undefined)
+        return { ok: false, message: "The --model option cannot be combined with --agent other" }
 
     const joinedProblem = problemParts.join(" ").trim()
     const problem = joinedProblem.length > 0 ? joinedProblem : undefined
@@ -728,10 +774,35 @@ export function matchTriageAgentAnswer(
 ): TriageAgentSpec | undefined {
     const trimmed = answer.trim()
     if (!trimmed) return undefined
+    const lowered = trimmed.toLowerCase()
     return (
         agents.find((_, index) => String(index + 1) === trimmed) ??
-        agents.find((agent) => agent.id === trimmed.toLowerCase() || agent.command === trimmed.toLowerCase())
+        agents.find(
+            (agent) => agent.id === lowered || agent.command === lowered || (agent.aliases?.includes(lowered) ?? false),
+        )
     )
+}
+
+/** Match either a detected agent CLI or the harness-agnostic "other" option in the interactive picker */
+export function matchTriagePickerAnswer(
+    agents: readonly TriageAgentSpec[],
+    answer: string,
+): TriageAgentSpec | "other" | undefined {
+    const matched = matchTriageAgentAnswer(agents, answer)
+    if (matched !== undefined) return matched
+    const trimmed = answer.trim()
+    if (!trimmed) return undefined
+    const lowered = trimmed.toLowerCase()
+    if (
+        trimmed === String(agents.length + 1) ||
+        trimmed === "0" ||
+        lowered === "other" ||
+        lowered === "any" ||
+        lowered === "none" ||
+        lowered === "print"
+    )
+        return "other"
+    return undefined
 }
 
 async function pickTriageAgent(
@@ -740,23 +811,25 @@ async function pickTriageAgent(
     output: NodeJS.WritableStream & CliStreamLike,
     env: Readonly<Record<string, string | undefined>>,
     platform: NodeJS.Platform,
-): Promise<TriageAgentSpec | undefined> {
+): Promise<TriageAgentSpec | "other" | undefined> {
     const theme = createCliTheme(output, { env, platform })
     const rl = createInterface({ input, output })
     try {
-        const menu = agents
-            .map(
+        const otherIndex = agents.length + 1
+        const menu = [
+            ...agents.map(
                 (agent, index) =>
                     `  ${theme.cyan(`[${index + 1}]`)} ${theme.bold(agent.label)} ${theme.faint(`(${agent.command})`)}`,
-            )
-            .join("\n")
+            ),
+            `  ${theme.cyan(`[${otherIndex}]`)} ${theme.bold("Other coding agent")} ${theme.faint("(harness-agnostic prompt and files)")}`,
+        ].join("\n")
         for (;;) {
             const answer = await rl.question(
                 `${theme.bold("Run triage with:")}\n${menu}\n${theme.cyan(theme.symbols.pointer)} `,
             )
-            const picked = matchTriageAgentAnswer(agents, answer)
+            const picked = matchTriagePickerAnswer(agents, answer)
             if (picked !== undefined) return picked
-            output.write(`${theme.gold(`Enter a number from 1 to ${agents.length}, or an agent name`)}\n`)
+            output.write(`${theme.gold(`Enter a number from 1 to ${otherIndex}, an agent name or other`)}\n`)
         }
     } catch (error) {
         if (error instanceof Error && (error.name === "AbortError" || error.message.includes("readline was closed")))
@@ -917,7 +990,11 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
     }
 
     let selected: { readonly agent: TriageAgentSpec; readonly resolved: string } | undefined
-    if (options.agent !== undefined) {
+    let useAgnosticHandoff = false
+    const interactive = environment.input.isTTY === true && environment.output.isTTY === true
+    if (options.agent === "other") {
+        useAgnosticHandoff = true
+    } else if (options.agent !== undefined) {
         selected = installed.find((entry) => entry.agent.id === options.agent)
         if (!selected) {
             const spec = triageAgents.find((item) => item.id === options.agent)!
@@ -928,21 +1005,13 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
                     "The triage prompt and context were written to:",
                     ...sessionFiles,
                     "",
-                    "Run `fluxerly triage --print` to copy the triage brief into any coding agent",
+                    "Run `fluxerly triage --print` or `fluxerly triage --agent other` to use any coding agent",
                     "",
                 ].join("\n"),
             )
             return 1
         }
-    } else if (installed.length === 1) {
-        selected = installed[0]
-    } else if (installed.length > 1) {
-        if (environment.input.isTTY !== true || environment.output.isTTY !== true) {
-            writeError(
-                "Multiple supported agent CLIs are installed and there is no terminal to pick one. Re-run with --agent claude, --agent codex, --agent antigravity or --print",
-            )
-            return 1
-        }
+    } else if (installed.length >= 1 && interactive) {
         const picked = await pickTriageAgent(
             installed.map((entry) => entry.agent),
             environment.input,
@@ -954,15 +1023,26 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
             environment.output.write("\nNo agent started\n")
             return 0
         }
-        selected = installed.find((entry) => entry.agent.id === picked.id)
+        if (picked === "other") useAgnosticHandoff = true
+        else selected = installed.find((entry) => entry.agent.id === picked.id)
+    } else if (installed.length === 1) {
+        selected = installed[0]
+    } else if (installed.length > 1) {
+        writeError(
+            "Multiple supported agent CLIs are installed and there is no terminal to pick one. Re-run with --agent claude, --agent codex, --agent antigravity, --agent opencode, --agent t3code, --agent other or --print",
+        )
+        return 1
     }
 
     const hasInput = options.problem !== undefined || logExcerpt !== undefined || trace !== undefined
     const launchPrompt = buildTriageLaunchPrompt(session.promptFilePath, hasInput)
-    if (!selected) {
+    if (useAgnosticHandoff || !selected) {
+        const intro = useAgnosticHandoff
+            ? "Use any coding agent with this redacted triage session"
+            : "No supported coding agent CLI (claude, codex, agy, opencode or t3) was found on PATH"
         environment.output.write(
             [
-                "No supported terminal coding agent CLI (claude, codex or agy) was found on PATH",
+                intro,
                 "",
                 "The triage playbook and project context were written to:",
                 ...sessionFiles,
@@ -978,14 +1058,21 @@ export async function runTriage(args: readonly string[], environment: TriageEnvi
     const { agent, resolved } = selected
     const isWindowsCmd = platform === "win32" && /\.(?:cmd|bat)$/i.test(resolved)
     const command = platform === "win32" ? agent.command : resolve(resolved)
-    const spawnArgs = [
-        ...(options.model === undefined ? [] : ["--model", options.model]),
-        ...(agent.promptArgs ?? []),
-        launchPrompt,
-    ]
-    const startNote = hasInput
-        ? "It will read the triage context and begin investigating"
-        : "It will read the redacted context and ask what went wrong"
+    const spawnArgs = agent.buildArgs
+        ? agent.buildArgs({ launchPrompt, model: options.model, targetProject })
+        : [
+              ...(options.model === undefined ? [] : ["--model", options.model]),
+              ...(agent.promptArgs ?? []),
+              launchPrompt,
+          ]
+    const startNote =
+        agent.id === "t3code"
+            ? hasInput
+                ? "It will start a triage thread and begin investigating"
+                : "It will start a triage thread and ask what went wrong"
+            : hasInput
+              ? "It will read the triage context and begin investigating"
+              : "It will read the redacted context and ask what went wrong"
     environment.output.write(
         theme.capabilities.color === "none"
             ? `Starting ${agent.label}. ${startNote}\n\n`

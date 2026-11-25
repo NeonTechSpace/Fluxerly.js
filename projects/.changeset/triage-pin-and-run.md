@@ -2,4 +2,4 @@
 "@neontechspace/fluxerly": minor
 ---
 
-Add pinned Fluxer server commit metadata to `fluxerly triage` context and an opt-in `fluxerly triage --run "<command>"` option that captures a redacted `FLUXERLY_DEBUG=rest,gateway` trace into the triage session
+Add pinned Fluxer server commit metadata, opt-in `--run "<command>"` debug trace capture, OpenCode and T3 Code launcher support, and a harness-agnostic `other` selection fallback to `fluxerly triage`
