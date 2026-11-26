@@ -1080,8 +1080,8 @@ serial("alive", ["/", "/commands/", "/docs/"], async () => {
     }
 
     // The docs' water moves by itself and never follows the page's scroll, and rests in Still. No script draws it. Its bubbles rise
-    // from a wide laptop up, where the reading column has a free side
-    const wide = sizes.find((candidate) => !candidate.touch && candidate.width >= 1440) ?? screen
+    // from 1680 px up, where the reading column has a free side past its prose and full-width tables
+    const wide = sizes.find((candidate) => !candidate.touch && candidate.width >= 1680) ?? screen
     for (const [mode, moves] of [["immersive", true], ["still", false]]) {
         const { context, page } = await openPage(wide, mode)
         await page.goto(`${site.url}/docs/commands/`, { waitUntil: "load" })
