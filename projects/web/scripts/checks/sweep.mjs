@@ -250,10 +250,25 @@ function auditLayout(touch) {
         }
         return false
     }
+    const scrollsHorizontally = (element) => {
+        for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+            if (["auto", "scroll"].includes(getComputedStyle(parent).overflowX) && parent.scrollWidth > parent.clientWidth + 1) {
+                const parentRect = box(parent)
+                if (parentRect.left >= -1 && parentRect.right <= width + 1) return true
+            }
+        }
+        return false
+    }
     for (const element of document.querySelectorAll("h1,h2,h3,h4,p,li,a,button,summary,label,td,th,dt,dd,figcaption")) {
         if (!shown(element) || !element.textContent?.trim() || element.closest(".skip-link,.sr-only,[aria-hidden=true]")) continue
         const rect = box(element)
         if ((rect.right > width + 1 || rect.left < -1) && !scrollsItself(element)) problems.push(`text past the edge: ${name(element)}`)
+    }
+    // Interactive controls clipped by an ancestor's overflow-x: hidden still get cut off on screen
+    for (const element of document.querySelectorAll("a,button,summary,input,select,[role=tab]")) {
+        if (!shown(element) || element.closest(".skip-link,.sr-only,[aria-hidden=true],[inert],[hidden]")) continue
+        const rect = box(element)
+        if ((rect.left < -1 || rect.right > width + 1) && !scrollsHorizontally(element)) problems.push(`control clipped at viewport edge: ${name(element)}`)
     }
 
     const header = document.querySelector("header")
@@ -282,6 +297,7 @@ function auditLayout(touch) {
         if (lowest > box(hero.querySelector("[data-waterline] .coin")).top - 4 && npm.left < controls[0].right) problems.push("hero: buttons touch the npm row")
         if (words.some((rect) => touching(mascot, rect, 8))) problems.push("hero: mascot over the words")
         if (lowest > height) problems.push("hero: buttons below the first screen")
+        if (controls.some((control) => control.left < -1 || control.right > width + 1)) problems.push("hero: buttons cut off")
         if (npm.bottom > height + 1) problems.push("hero: npm row below the first screen")
         if (mascot.right > width + 1 || mascot.left < -1 || mascot.bottom > Math.max(heroBox.bottom, height) + 1) problems.push("hero: mascot cut off")
         if (heroBox.height < height - 2) problems.push("hero: shorter than the screen")

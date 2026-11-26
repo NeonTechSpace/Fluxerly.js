@@ -194,6 +194,7 @@
 
 .ep .ep-row > td.ep-sdk {
     margin-top: 10px;
+    padding-right: 0.4em;
     padding-left: var(--indent);
 }
 
@@ -312,6 +313,7 @@
 
 .ep .ep-methods > li {
     min-width: 0;
+    max-width: 100%;
     margin: 0;
 }
 
@@ -388,6 +390,7 @@
 
     .ep .ep-row > td.ep-sdk {
         margin-top: 0;
+        padding-right: 0.4em;
         padding-left: 0;
     }
 

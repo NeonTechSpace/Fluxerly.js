@@ -322,4 +322,28 @@ import { links } from "../lib/links"
         }
     }
 
+    @media (max-width: 374px) {
+        .controls {
+            gap: 6px;
+        }
+
+        .control,
+        .primary {
+            padding-inline: 12px;
+        }
+
+        .github {
+            margin-left: 0;
+            padding-inline: 0;
+        }
+    }
+
+    @media (max-width: 359px) {
+        .controls {
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 8px;
+        }
+    }
+
 </style>

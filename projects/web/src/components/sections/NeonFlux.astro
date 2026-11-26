@@ -40,7 +40,7 @@ const scenes: { id: string; tab: string; hint: string; icon: IconName; channel: 
             {
                 from: "page",
                 card: {
-                    title: "Pick one colour",
+                    title: "Pick one color",
                     description: "Members can claim and drop roles from the menus while the role picker is available",
                     options: [
                         { label: "Red" },
@@ -347,17 +347,10 @@ const proofs = [
 
         <div class="closing" data-rise>
             <p>NeonFlux is a real Fluxer bot using Fluxerly.js, and public joining is on hold until it is ready. The source is open today</p>
-            <div class="closing-links">
-                <a class="source visit" href={links.neonfluxHome} target="_blank" rel="noopener">
-                    Visit NeonFlux
-                    <ArrowRightIcon size={16} weight="bold" aria-hidden="true" />
-                </a>
-                <a class="source" href={links.neonflux} target="_blank" rel="noopener">
-                    <GithubLogoIcon size={22} weight="fill" aria-hidden="true" />
-                    NeonFlux on GitHub
-                    <ArrowRightIcon size={16} weight="bold" aria-hidden="true" />
-                </a>
-            </div>
+            <a class="prose-link go-link" href={links.neonflux} target="_blank" rel="noopener">
+                NeonFlux on GitHub
+                <ArrowRightIcon size={15} weight="bold" aria-hidden="true" />
+            </a>
         </div>
     </div>
 </section>
@@ -405,7 +398,7 @@ const proofs = [
         new IntersectionObserver(([entry]) => orbit.toggleAttribute("data-seen", Boolean(entry?.isIntersecting)), { rootMargin: "200px 0px" }).observe(orbit)
     }
 
-    // Role picker demo pills: claim one colour or click the active one to drop it
+    // Role picker demo pills: claim one color or click the active one to drop it
     for (const picker of document.querySelectorAll<HTMLElement>("[data-role-picker]")) {
         const pills = [...picker.querySelectorAll<HTMLButtonElement>("[data-role-pill]")]
         for (const pill of pills) {
@@ -418,7 +411,7 @@ const proofs = [
 </script>
 
 <style>
-    /* The ways to the bot, its website and its source: glass in the section's own voice, as plain to see as the hero's buttons */
+    /* One primary action (.visit) with a quieter secondary link beside it for the repository */
     .source {
         display: inline-flex;
         align-items: center;
@@ -426,19 +419,18 @@ const proofs = [
         min-height: 48px;
         padding: 0 20px;
         font-size: var(--type-body);
-        font-weight: var(--weight-semibold);
-        color: var(--color-ink);
+        font-weight: var(--weight-medium);
+        color: var(--color-violet-mist);
         text-decoration: none;
         background:
-            radial-gradient(120% 90% at 50% 120%, rgb(190 150 255 / 0.32), rgb(190 150 255 / 0) 62%),
-            linear-gradient(180deg, rgb(255 255 255 / 0.1), rgb(255 255 255 / 0) 42%),
-            linear-gradient(180deg, rgb(82 52 160 / 0.8), rgb(44 28 104 / 0.86));
-        border: 1px solid rgb(190 150 255 / 0.5);
+            linear-gradient(180deg, rgb(255 255 255 / 0.05), rgb(255 255 255 / 0) 50%),
+            rgb(165 124 255 / 0.06);
+        border: 1px solid rgb(190 150 255 / 0.36);
         border-radius: var(--corner-round);
-        box-shadow:
-            inset 0 1px 0 rgb(255 255 255 / 0.22),
-            0 10px 26px -14px rgb(165 124 255 / 0.45);
+        box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.1);
         transition:
+            color var(--speed-fast) ease,
+            background-color var(--speed-fast) ease,
             border-color var(--speed-fast) ease,
             box-shadow var(--speed-normal) ease,
             transform var(--speed-fast) ease,
@@ -447,28 +439,35 @@ const proofs = [
 
     @media (hover: hover) {
         .source:hover {
-            border-color: rgb(210 180 255 / 0.95);
-            transform: translateY(-2px);
-            box-shadow:
-                inset 0 1px 0 rgb(255 255 255 / 0.3),
-                0 12px 30px -10px rgb(165 124 255 / 0.68);
+            color: var(--color-ink);
+            background:
+                linear-gradient(180deg, rgb(255 255 255 / 0.08), rgb(255 255 255 / 0) 50%),
+                rgb(165 124 255 / 0.14);
+            border-color: rgb(210 180 255 / 0.72);
+            transform: translateY(-1px);
+            box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18);
         }
     }
 
     .source:focus-visible {
-        border-color: rgb(210 180 255 / 0.95);
-        transform: translateY(-2px);
-        box-shadow:
-            inset 0 1px 0 rgb(255 255 255 / 0.3),
-            0 12px 30px -10px rgb(165 124 255 / 0.68);
+        color: var(--color-ink);
+        background:
+            linear-gradient(180deg, rgb(255 255 255 / 0.08), rgb(255 255 255 / 0) 50%),
+            rgb(165 124 255 / 0.14);
+        border-color: rgb(210 180 255 / 0.72);
+        transform: translateY(-1px);
+        box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18);
     }
 
-    /* The website comes first and burns a little brighter */
+    /* Primary action: Saturated violet glass with a gentle glow */
     .visit {
+        font-weight: var(--weight-semibold);
+        color: var(--color-ink);
         background:
             radial-gradient(120% 90% at 50% 120%, rgb(210 180 255 / 0.5), rgb(190 150 255 / 0) 62%),
             linear-gradient(180deg, rgb(255 255 255 / 0.14), rgb(255 255 255 / 0) 42%),
             linear-gradient(180deg, rgb(116 76 214 / 0.92), rgb(72 44 156 / 0.94));
+        border-color: rgb(190 150 255 / 0.55);
         box-shadow:
             inset 0 1px 0 rgb(255 255 255 / 0.28),
             0 12px 30px -14px rgb(165 124 255 / 0.62);
@@ -476,6 +475,12 @@ const proofs = [
 
     @media (hover: hover) {
         .visit:hover {
+            background:
+                radial-gradient(120% 90% at 50% 120%, rgb(210 180 255 / 0.56), rgb(190 150 255 / 0) 62%),
+                linear-gradient(180deg, rgb(255 255 255 / 0.16), rgb(255 255 255 / 0) 42%),
+                linear-gradient(180deg, rgb(124 84 222 / 0.94), rgb(78 48 166 / 0.96));
+            border-color: rgb(210 180 255 / 0.95);
+            transform: translateY(-2px);
             box-shadow:
                 inset 0 1px 0 rgb(255 255 255 / 0.36),
                 0 14px 36px -10px rgb(165 124 255 / 0.85);
@@ -483,6 +488,12 @@ const proofs = [
     }
 
     .visit:focus-visible {
+        background:
+            radial-gradient(120% 90% at 50% 120%, rgb(210 180 255 / 0.56), rgb(190 150 255 / 0) 62%),
+            linear-gradient(180deg, rgb(255 255 255 / 0.16), rgb(255 255 255 / 0) 42%),
+            linear-gradient(180deg, rgb(124 84 222 / 0.94), rgb(78 48 166 / 0.96));
+        border-color: rgb(210 180 255 / 0.95);
+        transform: translateY(-2px);
         box-shadow:
             inset 0 1px 0 rgb(255 255 255 / 0.36),
             0 14px 36px -10px rgb(165 124 255 / 0.85);
@@ -1148,12 +1159,6 @@ const proofs = [
         margin: 0;
         font-size: var(--type-body);
         color: var(--color-muted);
-    }
-
-    .closing-links {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0 28px;
     }
 
     .closing .go-link {

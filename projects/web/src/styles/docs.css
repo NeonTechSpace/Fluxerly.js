@@ -204,9 +204,8 @@
     mask-image: linear-gradient(to bottom, transparent var(--room-top), #000 calc(var(--room-top) + 3 * var(--clear-fade)));
 }
 
-/* Below a wide laptop the reading column has no free side: Its running text reaches the outline, and without the outline beside it
-   the Docs menu button and the page's outline ride in the reading column itself. The water keeps its light and leaves the bubbles out */
-@media (max-width: 1439px) {
+/* Below 1680 px the reading column has no true free water past its 36em prose measure and full-width tables. The water keeps its light and leaves the bubbles out */
+@media (max-width: 1679px) {
     .docs-bubbles {
         display: none;
     }
@@ -485,11 +484,13 @@ html[data-course-settling] .course-station::details-content {
     scrollbar-width: thin;
     scrollbar-color: var(--hair-strong) transparent;
     /* A row cut by the top edge is fully gone in the first stretch of the fade, so no half line of text shows
-       under the switch */
+       under the switch. Longhands only: The build's CSS minifier folds a following animation-timeline into an
+       animation shorthand, which the browser then rejects whole */
     mask-image: linear-gradient(to bottom, transparent calc(var(--fade-top) * 0.35), #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent);
-    animation:
-        course-fade-top linear both,
-        course-fade-bottom linear both;
+    animation-name: course-fade-top, course-fade-bottom;
+    animation-duration: auto;
+    animation-timing-function: linear;
+    animation-fill-mode: both;
     animation-timeline: scroll(self), scroll(self);
     animation-range:
         0 12px,
@@ -2291,11 +2292,13 @@ html[data-lang="ts"] [data-lang-variant="js"] {
     overscroll-behavior: contain;
     scrollbar-width: thin;
     scrollbar-color: var(--hair-strong) transparent;
-    /* Like the course, the outline fades at the edges where more of it lies beyond */
+    /* Like the course, the outline fades at the edges where more of it lies beyond. Longhands only: The build's
+       CSS minifier folds a following animation-timeline into an animation shorthand, which the browser rejects */
     mask-image: linear-gradient(to bottom, transparent calc(var(--fade-top) * 0.35), #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent);
-    animation:
-        course-fade-top linear both,
-        course-fade-bottom linear both;
+    animation-name: course-fade-top, course-fade-bottom;
+    animation-duration: auto;
+    animation-timing-function: linear;
+    animation-fill-mode: both;
     animation-timeline: scroll(self), scroll(self);
     animation-range:
         0 12px,
@@ -3154,7 +3157,11 @@ html[data-still] .search-dialog {
 
 .docs[data-still] .course-list a[data-pending]::before,
 .docs[data-still] .course[data-switched],
+.docs[data-still] .course-scroll,
+.docs[data-still] .docs-outline,
 .docs[data-still] .search-spinner,
+html[data-still] .course-scroll,
+html[data-still] .docs-outline,
 html[data-still] .search-spinner {
     animation: none;
 }

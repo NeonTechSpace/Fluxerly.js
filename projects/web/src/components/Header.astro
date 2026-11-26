@@ -536,18 +536,20 @@ const current = Astro.url.pathname.replace(/\/$/, "")
             .modes {
                 gap: 2px;
             }
-
-            .nav-item,
-            .nav :global(.trigger) {
-                min-width: 34px;
-            }
         }
 
-        @media (max-width: 340px) {
+        @media (max-width: 374px) {
             .site-header {
                 padding-inline: 12px;
             }
 
+            .nav-item,
+            .nav :global(.trigger) {
+                min-width: 36px;
+            }
+        }
+
+        @media (max-width: 340px) {
             .home-name {
                 font-size: 18px;
             }

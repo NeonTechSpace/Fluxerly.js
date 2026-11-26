@@ -17,7 +17,7 @@ export const playgroundPresets: readonly PlaygroundPreset[] = [
         id: "commands",
         label: "Commands",
         tagline: "Typed arguments, quoted parsing and instant validation replies",
-        guide: 'Try !ping or !ban oops below, then edit "Pong!" in bot.ts to watch it update live',
+        guide: 'Send !ping or !ban oops below, then edit "Pong!" in bot.ts to watch it update live',
         mode: "default",
         filename: "bot.ts",
         quickMessages: ["!ping", "!ban <@42> 7 spam", "!ban oops", "!help"],

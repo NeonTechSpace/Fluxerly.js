@@ -78,3 +78,14 @@ test("motion follows data-still, not the system's setting directly", () => {
     // Without script nothing can read a saved choice, so the fallback for that case is the one place
     assert.deepEqual(raw.filter((line) => !line.startsWith("src/components/PageTransitions.astro")), [])
 })
+
+// LightningCSS folds animation-timeline into an earlier animation shorthand in the same rule, which Chromium rejects
+test("scroll-driven animations stay in longhand properties", () => {
+    const raw = offenders((css) =>
+        [...css.matchAll(/\{([^{}]*animation-timeline\s*:[^}]*)\}/g)]
+            .map((match) => match[1]!)
+            .filter((block) => /(?<![\w-])animation\s*:/.test(block))
+            .map(() => "animation shorthand paired with animation-timeline"),
+    )
+    assert.deepEqual(raw, [])
+})

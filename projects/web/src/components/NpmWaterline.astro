@@ -356,6 +356,21 @@ const npmMark =
             scale var(--speed-fast) cubic-bezier(0.2, 0.7, 0.2, 1);
     }
 
+    /* Clear hit layers expand each 32 px button to a 44x44 px touch target without changing its drawn size or overlapping its neighbor */
+    @media (any-pointer: coarse) {
+        .row .chip .tool-button.pick::after {
+            content: "";
+            position: absolute;
+            inset: -6px -1px -6px -11px;
+        }
+
+        .row .chip .tool-button.copy::after {
+            content: "";
+            position: absolute;
+            inset: -6px -11px -6px -1px;
+        }
+    }
+
     .tool-button:hover,
     .tool-button[aria-expanded="true"] {
         color: var(--color-ink);
