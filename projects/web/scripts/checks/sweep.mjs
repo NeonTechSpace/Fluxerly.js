@@ -343,6 +343,18 @@ function auditLayout(touch) {
     for (const element of document.querySelectorAll("[data-waterline] .chip-wrap > .chip, .cmd-chip, .control:not(.github), [data-menu] .option, .fr-tab[aria-selected=true], .pager-link, .side-open, .code-more")) {
         if (shown(element)) clearOfEdges(element, box(element), 6)
     }
+    // The pager's arrow keeps clear room from its label rather than sitting flush against it when styled as a box
+    for (const link of document.querySelectorAll(".pager-link")) {
+        const dir = link.querySelector(".pager-dir")
+        if (!dir || !shown(dir)) continue
+        const label = textRects(dir)[0]
+        if (!label) continue
+        const next = link.classList.contains("next")
+        const arrowWidth = parseFloat(getComputedStyle(dir, next ? "::after" : "::before").width)
+        if (!Number.isFinite(arrowWidth) || arrowWidth <= 0) continue
+        const gap = next ? box(dir).right - label.right - arrowWidth * zoom : label.left - box(dir).left - arrowWidth * zoom
+        if (gap < 4 * zoom) problems.push(`pager arrow ${Math.round((gap / zoom) * 10) / 10} px from its label: ${name(link)}`)
+    }
     for (const element of document.querySelectorAll(".docs-prose :is(p, li) > code, .docs-prose a.peek > code, .inline-code, a.peek-level")) {
         if (shown(element) && element.getClientRects().length) clearOfEdges(element, element.getClientRects()[0], 2, true)
     }

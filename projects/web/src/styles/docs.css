@@ -2232,9 +2232,16 @@ html[data-lang="ts"] [data-lang-variant="js"] {
 }
 
 .pager-dir {
+    display: flex;
+    align-items: center;
+    gap: 7px;
     font-size: var(--type-small);
     color: var(--ink-muted);
     transition: color var(--speed-fast) ease;
+}
+
+.pager-link.next .pager-dir {
+    justify-content: flex-end;
 }
 
 .pager-link:focus-visible .pager-dir {
@@ -2242,14 +2249,12 @@ html[data-lang="ts"] [data-lang-variant="js"] {
 }
 
 .pager-link.next .pager-dir::after {
-    content: " →" / "";
-    display: inline-block;
+    content: "→" / "";
     transition: transform var(--speed-fast) ease;
 }
 
 .pager-link:not(.next) .pager-dir::before {
-    content: "← " / "";
-    display: inline-block;
+    content: "←" / "";
     transition: transform var(--speed-fast) ease;
 }
 
