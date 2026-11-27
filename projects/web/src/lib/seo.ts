@@ -24,7 +24,7 @@ export const shareImage = {
 
 type Node = Record<string, unknown>
 
-const org: Node = {
+export const org: Node = {
     "@type": "Organization",
     "@id": `${siteUrl}/#org`,
     name: "NeonTechSpace",
@@ -131,17 +131,36 @@ export function faqFromMarkdown(source: string): FaqItem[] {
 
 // Structured TechArticle node for guide pages
 export function techArticleGraph({ title, description, path }: { title: string; description: string; path: string }): Node {
+    const url = new URL(path, `${siteUrl}/`).href
     return {
         "@type": "TechArticle",
         headline: title,
         description,
-        url: new URL(path, `${siteUrl}/`).href,
+        url,
+        mainEntityOfPage: url,
+        image: shareImage.url,
         inLanguage: "en",
         isPartOf: { "@id": website["@id"] },
         about: { "@id": sdk["@id"] },
         author: { "@id": org["@id"] },
         publisher: { "@id": org["@id"] },
     }
+}
+
+// Structured CollectionPage node for the docs overview page (keeps breadcrumb trails to deeper docs pages)
+export function docsIndexGraph({ title, description }: { title: string; description: string }): Node[] {
+    return [
+        {
+            "@type": "CollectionPage",
+            "@id": `${siteUrl}/docs/#collection`,
+            name: title,
+            description,
+            url: `${siteUrl}/docs/`,
+            inLanguage: "en",
+            isPartOf: { "@id": website["@id"] },
+            about: { "@id": sdk["@id"] },
+        },
+    ]
 }
 
 // Structured WebPage and BreadcrumbList nodes for a feature page

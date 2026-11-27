@@ -534,28 +534,20 @@ export default function CodeEditor({
             onDiagnosticsRef.current?.(diagnostics)
         })
 
-        // Defer worker download until after initial paint so LCP/FCP stay untouched
-        let idleHandle: number | undefined
-        let timeoutHandle: number | undefined
+        // Warm up the TypeScript worker on first real editor interaction so passive page loads
+        // and crawlers skip downloading the 5+ MB compiler and type bundle
+        const warmUp = new AbortController()
         const kickOff = () => {
+            warmUp.abort()
             void playgroundTsClient.ensureStarted(filenameRef.current, viewRef.current?.state.doc.toString() ?? valueRef.current)
         }
-        const win = window as Window & {
-            requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
-            cancelIdleCallback?: (handle: number) => void
-        }
-        if (typeof win.requestIdleCallback === "function") {
-            idleHandle = win.requestIdleCallback(kickOff, { timeout: 600 })
-        } else {
-            timeoutHandle = window.setTimeout(kickOff, 350)
+        for (const kind of ["pointerenter", "pointerdown", "focusin", "keydown"] as const) {
+            host.addEventListener(kind, kickOff, { once: true, passive: true, signal: warmUp.signal })
         }
 
         return () => {
             unsubscribeDiagnostics()
-            if (idleHandle !== undefined && typeof win.cancelIdleCallback === "function") {
-                win.cancelIdleCallback(idleHandle)
-            }
-            if (timeoutHandle !== undefined) window.clearTimeout(timeoutHandle)
+            warmUp.abort()
             view.destroy()
             viewRef.current = null
         }

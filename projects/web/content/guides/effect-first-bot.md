@@ -12,7 +12,7 @@ The examples introduce each Effect concept before combining them into a bot
 
 ## Install the matching version
 
-To start from a generated Effect project with a test, run the command from [Generate the project](/docs/quick-start/#generate-the-project) with `--template effect` in the bot's folder, which may already hold the token's `.env` and a `.gitignore`.
+To start from a generated Effect project with a test, run the command from [Generate the project](/docs/quick-start/#generate-the-project) with `--template effect` in the bot's folder, which may already hold the token's `.env` and a `.gitignore`
 
 First generate a project with [the quick start](/docs/quick-start/) and choose Effect, which installs the SDK, Effect, TypeScript 7 and the Node.js types for typechecking. Fluxerly is tested against Node.js 26.13 or newer. A project set up by hand needs `"type": "module"` in `package.json` and the TypeScript setup that the quick start's TypeScript section describes. Native examples use TypeScript
 

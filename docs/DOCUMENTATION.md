@@ -93,9 +93,9 @@ pnpm install --frozen-lockfile
 pnpm docs:dev
 ```
 
-The `docs:dev` script builds the SDK, generates the content and starts Astro. `docs:dev:skip-build` reuses the existing SDK build.
+The `docs:dev` script builds the SDK, generates the content and starts Astro. `docs:dev:skip-build` reuses the existing SDK build
 
-For non-interactive validation, run `pnpm check`. The aggregate check includes contribution tooling, the SDK, release tooling and the website's lint, build, types, tests and search ranking, each step starting as soon as the steps it reads from pass.
+For non-interactive validation, run `pnpm check`. The aggregate check includes contribution tooling, the SDK, release tooling and the website's lint, build, types, tests and search ranking, each step starting as soon as the steps it reads from pass
 
 For rendered checks, install Chromium with `pnpm --filter fluxerly-docs exec playwright install chromium`, then build:
 
@@ -109,11 +109,11 @@ See [the public API documentation gate](/docs/DOCUMENTATION.md#public-api-docume
 
 ## Published versions
 
-A local build shows the working tree. The public site is built only from published versions, each from the snapshot made for it.
+A local build shows the working tree. The public site is built only from published versions, each from the snapshot made for it
 
-Snapshot creation ([snapshot.js](/projects/web/scripts/snapshot.js)) requires a prepared release version and a clean reviewed source checkout. A nightly snapshot receives its planned version through `--nightly VERSION`. The snapshot holds the guides, reference, endpoint map, examples and changelog, with the exact version and source commit. Release preparation binds it to the immutable package candidate as `docs.json`, and publication requires the [registry contract and external setup](/docs/RELEASING.md#registry-publication-contract).
+Snapshot creation ([snapshot.js](/projects/web/scripts/snapshot.js)) requires a prepared release version and a clean reviewed source checkout. A nightly snapshot receives its planned version through `--nightly VERSION`. The snapshot holds the guides, reference, endpoint map, examples and changelog, with the exact version and source commit. Release preparation binds it to the immutable package candidate as `docs.json`, and publication requires the [registry contract and external setup](/docs/RELEASING.md#registry-publication-contract)
 
-Release import ([fetch-releases.js](/projects/web/scripts/fetch-releases.js)) uses authenticated `gh` reads. It selects every Stable release and the newest published nightly, then checks each `docs.json` against its digest, size, tag and source commit. Snapshots written for an earlier version of the site are skipped, so that release has no pages here. A public build needs at least one current snapshot. Imports go to ignored `projects/web/released/`, which must start empty. The import keeps a copy of each asset in ignored `projects/web/.cache/releases/`, named by its digest, and uses a copy only when it matches the digest and size in the fresh release metadata, so each asset is downloaded once. With `--cache-only` it fills that cache without writing `released/`. CI's Check workflow does that on each push to `main` and saves the cache, which the Website workflow only restores. Retain every immutable `docs.json` asset.
+Release import ([fetch-releases.js](/projects/web/scripts/fetch-releases.js)) uses authenticated `gh` reads. It selects every Stable release and the newest published nightly, then checks each `docs.json` against its digest, size, tag and source commit. Snapshots written for an earlier version of the site are skipped, so that release has no pages here. A public build needs at least one current snapshot. Imports go to ignored `projects/web/released/`, which must start empty. The import keeps a copy of each asset in ignored `projects/web/.cache/releases/`, named by its digest, and uses a copy only when it matches the digest and size in the fresh release metadata, so each asset is downloaded once. With `--cache-only` it fills that cache without writing `released/`. CI's Check workflow does that on each push to `main` and saves the cache, which the Website workflow only restores. Retain every immutable `docs.json` asset
 
 [build-public.mjs](/projects/web/scripts/docs/build-public.mjs) builds the site:
 
@@ -130,7 +130,7 @@ Numbered nightly addresses and retired channels return 404. Each version has its
 
 [Website](/.github/workflows/website.yml) is started on `main` by Release publish after the GitHub release is announced, in its own run, or run by hand. It always checks out `main`, imports the published versions' snapshots, and runs `check:public`. The full screen check, `test:browser` on every screen, runs in [Screens](/.github/workflows/screens.yml) after each push to `main` that changes what the website builds from, so a deploy never waits for it. Before upload it requires the `check` job of the main-push [Check workflow](/.github/workflows/ci.yml) run for that exact checkout through [checked-source.js](/projects/web/scripts/checked-source.js), waiting up to twenty minutes and rejecting failed, cancelled, missing or mismatched evidence
 
-[deploy.js](/projects/web/scripts/deploy.js) validates the Pages project, the Production branch `main`, the custom hostname, the source marker and the build's sitemap and redirects. It uploads with Wrangler from `projects/web`, then verifies the exact deployment at its Pages URL and at `https://fluxerly.neontechspace.com`: The source marker, the `/docs/latest/` redirect and that `/docs/` is open to search engines. Cloudflare bot protection on the custom domain counts as a warning, and a plain access denial as a failure. Never rerun an upload after an uncertain result, reconcile it in Cloudflare first, because a failed step doesn't prove that nothing was uploaded.
+[deploy.js](/projects/web/scripts/deploy.js) validates the Pages project, the Production branch `main`, the custom hostname, the source marker and the build's sitemap and redirects. It uploads with Wrangler from `projects/web`, then verifies the exact deployment at its Pages URL and at `https://fluxerly.neontechspace.com`: The source marker, the `/docs/latest/` redirect and that `/docs/` is open to search engines. Cloudflare bot protection on the custom domain counts as a warning, and a plain access denial as a failure. Never rerun an upload after an uncertain result, reconcile it in Cloudflare first, because a failed step doesn't prove that nothing was uploaded
 
 Set these in GitHub Settings, Environments, `website`:
 

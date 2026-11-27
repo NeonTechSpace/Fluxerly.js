@@ -21,6 +21,7 @@ jobs:
         id: checkout
         with:
           ref: main
+          fetch-depth: 0
           persist-credentials: false
       - uses: pnpm/setup@731dfb6463bbd11c11fd0ee11fe00ed0e36d48a1 # v3.2.0
         id: setup

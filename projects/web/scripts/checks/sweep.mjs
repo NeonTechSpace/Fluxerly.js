@@ -600,6 +600,13 @@ part("tour", ["/", "/docs/commands/", "/does-not-exist/"], async (entries) => {
         })
         await page.goto(site.url + route, { waitUntil: "load" })
         const where = `${screen.name} ${route}`
+        // A zero-interaction arrival stays unobstructed so crawlers and automated snapshots never see a dimmed hero
+        await page.waitForTimeout(1400)
+        if (await page.evaluate(() => Boolean(document.querySelector(".tour:popover-open")))) {
+            report("first visit tip opened before any user interaction", where)
+        }
+        // First trusted interaction arms the tip, which then appears around the switch
+        await page.keyboard.press("Shift")
         const shown = await page.waitForSelector(".tour[data-on]", { timeout: 15000 }).then(() => true, () => false)
         if (!shown) {
             report("first visit tip never showed", where)
@@ -625,9 +632,10 @@ part("tour", ["/", "/docs/commands/", "/does-not-exist/"], async (entries) => {
         await page.mouse.click(screen.width / 2, screen.height - 8)
         const gone = await page.waitForFunction(() => !document.querySelector(".tour:popover-open"), null, { timeout: 3000 }).then(() => true, () => false)
         if (!gone) report("first visit tip won't close", where)
-        // The tip opens a set time after the page loads, so the page's clock is moved past that time instead of waited out
+        // After dismissal, interacting again on reload must never bring the tip back
         await page.clock.install()
         await page.reload({ waitUntil: "load" })
+        await page.keyboard.press("Shift")
         await page.clock.runFor(5000)
         if (await page.evaluate(() => Boolean(document.querySelector(".tour:popover-open")))) report("first visit tip came back", where)
         await context.close()

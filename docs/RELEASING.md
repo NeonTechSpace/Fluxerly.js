@@ -5,14 +5,14 @@ Use [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly
 
 ## Releases in short
 
-There are two kinds of release: Nightly and Stable.
+There are two kinds of release: Nightly and Stable
 
 - **Nightly** happens by itself twice a day when the SDK changed. It's how new work reaches people first, and it can break things
 - **Stable** is a nightly that's ready. You choose when, and it ships the same code that nightly already shipped
 
 ## Release a Stable version
 
-Stable can only ship what a nightly already shipped. The tooling compares the two, and stops if the code differs or there's no nightly of that version.
+Stable can only ship what a nightly already shipped. The tooling compares the two, and stops if the code differs or there's no nightly of that version
 
 1. Check that the newest nightly has what you want to ship. If `main` has changes the nightly lacks, [run a nightly](/docs/RELEASING.md#nightly-builds) first.
    Then run the live release run on a checkout of that source, as [release runs](/projects/sdk/tests/live/README.md#release-runs) describes, and fix any failure before going on.
@@ -26,7 +26,7 @@ Stable can only ship what a nightly already shipped. The tooling compares the tw
 6. Confirm the result in the run summaries.
    For a downloaded candidate, `pnpm release:status` reports whether npm serves the reviewed bytes and the current tags
 
-If new SDK code lands on `main` before you merge, don't merge. Close the pull request, let a nightly publish the new code, then run Release version PR again. If it's already merged, revert the new code before the next nightly, because that nightly would otherwise move on to the following version. Then start Release prepare from `main` by hand, because a revert doesn't start it.
+If new SDK code lands on `main` before you merge, don't merge. Close the pull request, let a nightly publish the new code, then run Release version PR again. If it's already merged, revert the new code before the next nightly, because that nightly would otherwise move on to the following version. Then start Release prepare from `main` by hand, because a revert doesn't start it
 
 Every step can be rerun with the same inputs. Publication reads npm before uploading and never uploads a version twice.
 If publication fails or does not start, run the `gh workflow run release-publish.yml` command printed in the preparation summary, or start Release publish from `main` with that preparation run ID and candidate checksum
@@ -125,11 +125,11 @@ Publication, verification, status and the GitHub announcement download the tarba
 | A minor note | `1000.1.0` |
 | A major note | `1001.0.0` |
 
-Nightlies carry that next number, such as `1000.1.0-nightly.20261101.5`, and Stable then uses it without the suffix. Nightly versions exist only in their packages and are never committed. Only a Stable release changes the version stored in the repository.
+Nightlies carry that next number, such as `1000.1.0-nightly.20261101.5`, and Stable then uses it without the suffix. Nightly versions exist only in their packages and are never committed. Only a Stable release changes the version stored in the repository
 
-A new epoch is a deliberate choice. Run Release version PR with `epoch`, such as `2000`, with a major release note. It stores a target like `2000.0.0-nightly.0` on `main`, and nightlies then build toward it. A target never drops, even if notes are removed later.
+A new epoch is a deliberate choice. Run Release version PR with `epoch`, such as `2000`, with a major release note. It stores a target like `2000.0.0-nightly.0` on `main`, and nightlies then build toward it. A target never drops, even if notes are removed later
 
-Between Stables, the stored version is the last Stable and `projects/.changeset/` holds the notes for the next one. A new epoch target also uses `projects/.changeset/pre/` and `projects/.changeset/pre.json`, which keeps the last Stable as `releaseBase`. Before the Stable version PR, edit or delete notes that later changes replaced, so the changelog never announces something the same release removes.
+Between Stables, the stored version is the last Stable and `projects/.changeset/` holds the notes for the next one. A new epoch target also uses `projects/.changeset/pre/` and `projects/.changeset/pre.json`, which keeps the last Stable as `releaseBase`. Before the Stable version PR, edit or delete notes that later changes replaced, so the changelog never announces something the same release removes
 
 Also check the notes against the release's whole diff since the last Stable, because these changes are easy to miss:
 
@@ -148,11 +148,11 @@ Website, test and release-tooling changes that do not alter the published SDK ne
 
 ### Stable and nightly
 
-Any Stable, small or big, comes from a nightly. The newest published nightly of that version is its checkpoint: The two must ship the same code, or the release stops. You decide when a nightly is ready, and there is no waiting period.
+Any Stable, small or big, comes from a nightly. The newest published nightly of that version is its checkpoint: The two must ship the same code, or the release stops. You decide when a nightly is ready, and there is no waiting period
 
-Nightlies never wait for anything. A nightly must sort above every published nightly of its version. If a higher one publishes first, the lower run succeeds without publishing when a newer nightly has the same code, and otherwise fails with the newer version error. A nightly publishes under the `nightly` tag and never moves `latest`.
+Nightlies never wait for anything. A nightly must sort above every published nightly of its version. If a higher one publishes first, the lower run succeeds without publishing when a newer nightly has the same code, and otherwise fails with the newer version error. A nightly publishes under the `nightly` tag and never moves `latest`
 
-Each nightly compares against the previous nightly on the same `major.minor` line, and the first one on a line has nothing to compare against. A failed registry lookup, including a missing package, always stops the release.
+Each nightly compares against the previous nightly on the same `major.minor` line, and the first one on a line has nothing to compare against. A failed registry lookup, including a missing package, always stops the release
 
 ### Workflows
 

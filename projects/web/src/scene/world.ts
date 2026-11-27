@@ -548,13 +548,14 @@ export function createWorld(hero: HTMLElement): World | null {
         const companionsLoading = companions.load(loader, hero.clientHeight, scenePixelRatio(), heroIcons)
         // Companions take their places from where the words end, so wait for the real fonts
         const fonts = document.fonts?.ready.catch(() => {})
-        // Shaders compile in the background. The reflection target compiles only what the reflection camera sees
+        // Compile shaders without triggering noisy KHR_parallel_shader_compile warnings when the extension is absent
+        const parallelCompile = Boolean(renderer.getContext().getExtension("KHR_parallel_shader_compile"))
         water.visible = false
         renderer.setRenderTarget(reflectionTarget)
-        const reflected = renderer.compileAsync(scene, reflectionCamera)
+        const reflected = parallelCompile ? renderer.compileAsync(scene, reflectionCamera) : (renderer.compile(scene, reflectionCamera), Promise.resolve())
         water.visible = true
         renderer.setRenderTarget(null)
-        const direct = renderer.compileAsync(scene, camera)
+        const direct = parallelCompile ? renderer.compileAsync(scene, camera) : (renderer.compile(scene, camera), Promise.resolve())
         const [map, waves] = await loading
         textures = [map, waves]
         if (released) {

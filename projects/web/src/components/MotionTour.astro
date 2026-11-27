@@ -51,6 +51,10 @@
         let before: Element | null = null
 
         const hasOpenDialog = () => document.querySelector("dialog[open]") !== null
+        const isEditable = (target: EventTarget | null) =>
+            target instanceof Element && Boolean(target.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""], .cm-editor'))
+        let waitingForBlur = false
+        let blurTimer = 0
 
         const remember = () => {
             done = true
@@ -112,6 +116,17 @@
             if (!done && !open) show()
         }
 
+        const onEditorBlur = () => {
+            window.clearTimeout(blurTimer)
+            // Focus moves to the newly focused element right after focusout, so check on the next tick
+            blurTimer = window.setTimeout(() => {
+                if (done || open || isEditable(document.activeElement)) return
+                waitingForBlur = false
+                document.removeEventListener("focusout", onEditorBlur, true)
+                show()
+            }, 0)
+        }
+
         const dialogObserver = new MutationObserver(() => {
             if (open && hasOpenDialog()) close(false, true)
         })
@@ -141,6 +156,14 @@
             // Do not open the spotlight over an open modal dialog, wait until no dialog is open
             if (hasOpenDialog()) {
                 document.addEventListener("close", onDialogClose, true)
+                return
+            }
+            // Do not steal focus while typing in a form field or the Playground editor
+            if (isEditable(document.activeElement)) {
+                if (!waitingForBlur) {
+                    waitingForBlur = true
+                    document.addEventListener("focusout", onEditorBlur, true)
+                }
                 return
             }
             // Read down the page already, the header has gone, and the switch with it. The tip waits for it to come back
@@ -181,18 +204,52 @@
 
         catcher.addEventListener("click", () => close())
         card.addEventListener("click", () => close())
+        const interaction = new AbortController()
+        let interacted = false
+        let moveOrigin: [number, number] | null = null
+
+        const arm = () => {
+            if (done || open || timer) return
+            timer = window.setTimeout(show, openDelay)
+        }
+
+        const onInteract = (event: Event) => {
+            if (!event.isTrusted || interacted || done) return
+            if (event.type === "pointermove") {
+                const { clientX, clientY } = event as PointerEvent
+                // Browsers synthesize a pointermove at (0, 0) during layout with no real input, so require actual travel
+                if (!moveOrigin) {
+                    moveOrigin = [clientX, clientY]
+                    return
+                }
+                if (Math.hypot(clientX - moveOrigin[0], clientY - moveOrigin[1]) < 6) return
+            }
+            interacted = true
+            interaction.abort()
+            if (document.readyState === "complete") arm()
+            else window.addEventListener("load", arm, { once: true })
+        }
+
         // Pressing the switch does what the tip says. There is nothing more to tell, before or after it shows
         subscribeExperience(() => {
+            interaction.abort()
             window.clearTimeout(timer)
+            window.clearTimeout(blurTimer)
+            waitingForBlur = false
+            window.removeEventListener("load", arm)
             window.removeEventListener("scroll", wait)
+            document.removeEventListener("keydown", onKey)
             document.removeEventListener("close", onDialogClose, true)
+            document.removeEventListener("focusout", onEditorBlur, true)
             if (open) close()
             else remember()
         })
 
-        const begin = () => (timer = window.setTimeout(show, openDelay))
-        if (document.readyState === "complete") begin()
-        else window.addEventListener("load", begin, { once: true })
+        // Wait for a first real user interaction before arming the spotlight so zero-interaction
+        // arrivals and search-engine snapshots see the unobstructed page
+        for (const kind of ["pointermove", "pointerdown", "touchstart", "wheel", "keydown"] as const) {
+            window.addEventListener(kind, onInteract, { passive: true, signal: interaction.signal })
+        }
     }
 </script>
 

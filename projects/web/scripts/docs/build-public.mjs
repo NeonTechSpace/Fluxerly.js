@@ -100,6 +100,7 @@ async function build(target, outDir) {
             ...process.env,
             DOCS_CONTENT: content,
             DOCS_VERSION: target.version,
+            DOCS_SNAPSHOT_COMMIT: snapshots.get(target.version).sourceCommit,
             DOCS_VERSIONS: JSON.stringify(shown),
             DOCS_OLDER_VERSIONS: JSON.stringify(others.map(versionEntry)),
             ...(isNewest ? {} : { PUBLIC_DOCS_BASE: `/docs/${target.path}/` }),

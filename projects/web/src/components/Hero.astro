@@ -562,7 +562,7 @@ const place = (b: ArtBox) =>
             flex-direction: column;
             align-items: center;
             gap: min(28px, 3.4svh);
-            min-height: calc(100svh / var(--page-zoom, 1));
+            min-height: min(calc(100svh / var(--page-zoom, 1)), 255vw);
             justify-content: center;
             padding: clamp(84px, 14svh, 120px) 20px clamp(32px, 8svh, 72px);
             text-align: center;

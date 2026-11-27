@@ -17,7 +17,12 @@ const words = (title: string) => (title.includes(" ") ? [title] : title.split(/(
     {
         items.map((item) => (
             <li>
-                <a href={item.href} aria-current={item.current ? "page" : undefined} data-course-link>
+                <a
+                    href={item.href}
+                    rel={/\.(?:txt|md)$/i.test(item.href) ? "nofollow" : undefined}
+                    aria-current={item.current ? "page" : undefined}
+                    data-course-link
+                >
                     {words(item.title).map((word, index) => (
                         <>
                             {index > 0 && <wbr />}

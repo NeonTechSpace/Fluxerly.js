@@ -228,7 +228,7 @@ Knip reports unused SDK files and exports, and CSpell checks SDK source comments
 Source scans complete the lint. The [em-dash check](/projects/scripts/em-dashes.mjs) fails on any em dash in a tracked or new SDK or website file, except fixtures that copy Fluxer's text exactly. The [failure-mapping check](/projects/sdk/scripts/failure-mapping.js) fails when SDK source maps failures with `Effect.mapError` or `Cause.map` instead of the helpers that also map failures Effect turned into defects.
 These tools are exact workspace development dependencies configured in [projects/](/projects/).
 In CI, actionlint lints the workflow files and zizmor audits them.
-Website formatting has not been selected.
+Website formatting has not been selected
 
 The Effect language service for TypeScript 7, `@effect/tsgo`, checks SDK source, tests and examples for Effect mistakes, such as an Effect that is built but never run.
 Its errors and warnings fail the lint.

@@ -229,6 +229,7 @@ test("Release and website workflows only restore Fluxer's pinned files that CI s
 // Catches: A deploy of a source whose whole Check did not pass, or one that falls back to deploying without evidence
 test("Website deploys only after the check job of the exact main-push Check run passed, with no fallback", () => {
     const deploy = workflows["website.yml"].jobs.deploy.steps
+    assert.equal(deploy.find((step) => step.id === "checkout").with["fetch-depth"], 0, "Website checkout needs full git history for real sitemap lastmod dates")
     const ci = deploy.find((step) => step.id === "ci")
     assert.equal(ci.run, "node web/scripts/checked-source.js --scope check")
     assert.doesNotMatch(ci.run, /allow-missing/)

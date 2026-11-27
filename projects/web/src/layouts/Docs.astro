@@ -20,7 +20,8 @@ import { docsCourse, guideGroup, type NavItem, type TocItem } from "../lib/docs-
 import { docsTitleQualifier } from "../lib/docs-titles"
 import { endpoints } from "../lib/endpoints"
 import { fluxerPinOf } from "../lib/fluxer-pin"
-import { breadcrumbs, faqFromMarkdown, faqGraph, techArticleGraph } from "../lib/seo"
+import { breadcrumbs, docsIndexGraph, faqFromMarkdown, faqGraph, org, techArticleGraph } from "../lib/seo"
+import { isExcludedFromSearch } from "../lib/index-policy.mjs"
 import { seededRandom } from "../lib/stars"
 import { identifierHtml } from "../../scripts/docs/code-breaks.mjs"
 import docsSheet from "../lib/docs-sheet.js?raw"
@@ -111,7 +112,7 @@ const article = await Astro.slots.render("default")
 const markdownUrl = guides.some((guide) => guide.slug === slug) ? `${import.meta.env.PUBLIC_DOCS_BASE ?? "/docs/"}${slug}.md` : undefined
 
 // A title another docs page shares takes the step that tells them apart, such as its entry point
-const pageTitle = slug === "index" ? "Fluxerly.js docs" : docsPageTitle(title, await docsTitleQualifier(current))
+const pageTitle = slug === "index" ? "Fluxerly.js Documentation · Fluxer Bot SDK Guides & API" : docsPageTitle(title, await docsTitleQualifier(current))
 // What search shows under the title. The overview describes the docs as a whole, every other page has its own
 // description or one made from its title, completed from its opening paragraphs, lead and sections when short
 const metaDescription =
@@ -122,6 +123,7 @@ const metaDescription =
               [...openingParagraphs(article), description ?? ""],
               toc.filter((item) => item.depth === 2).map((item) => item.text),
           )
+const noindex = isExcludedFromSearch(current)
 // The trail search engines show above a result: Docs, the reference's own steps where it has them, then this page
 // An outline entry, with the heading it sits under for screen readers where one is given
 const outlineHtml = (item: TocItem) => `${item.under ? `<span class="sr-only">${item.under.replace(/[&<>"]/g, (character) => `&#${character.charCodeAt(0)};`)} </span>` : ""}${identifierHtml(item.text)}`
@@ -132,11 +134,14 @@ const trail = breadcrumbs([
 ])
 const faqSource = slug === "faq" ? guides.find((guide) => guide.slug === "faq")?.source : undefined
 const faqNode = faqSource ? faqGraph(faqFromMarkdown(faqSource)) : undefined
-const graph = [
-    ...(trail ? [trail] : []),
-    ...(section === "guides" && slug !== "index" ? [techArticleGraph({ title, description: metaDescription, path: current })] : []),
-    ...(faqNode ? [faqNode] : []),
-]
+const graph =
+    slug === "index"
+        ? docsIndexGraph({ title: pageTitle, description: metaDescription })
+        : [
+              ...(trail ? [trail] : []),
+              ...(section === "guides" ? [techArticleGraph({ title, description: metaDescription, path: current }), org] : []),
+              ...(faqNode ? [faqNode] : []),
+          ]
 ---
 
 <!doctype html>
@@ -144,7 +149,7 @@ const graph = [
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <Seo title={pageTitle} description={metaDescription} type={slug === "index" ? "website" : "article"} graph={graph} />
+        <Seo title={pageTitle} description={metaDescription} noindex={noindex} type={slug === "index" ? "website" : "article"} graph={graph} />
         {markdownUrl && <link rel="alternate" type="text/markdown" href={markdownUrl} title="This page as Markdown" />}
         <link rel="alternate" type="text/plain" href={`${docsBase}llms.txt`} title="Docs index for AI tools" />
         <link rel="preload" href={outfitUrl} as="font" type="font/woff2" crossorigin />

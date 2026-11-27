@@ -56,8 +56,5 @@
 /docs/*.md
   X-Robots-Tag: noindex
 
-/docs/api/*.md
-  X-Robots-Tag: noindex
-
 /docs/*.txt
   X-Robots-Tag: noindex

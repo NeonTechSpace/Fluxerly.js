@@ -90,7 +90,7 @@ When a check fails only when run together with others, declare it `shared-state`
 
 ### Request pacing and the stop rule
 
-Every live HTTP request passes through one shared pacer in `support/live-pacing.js`: The raw helper's setup, readback and cleanup requests, the SDK's own requests inside harness processes, discovery, asset reads and supervised children. Requests to local loopback servers are not paced.
+Every live HTTP request passes through one shared pacer in `support/live-pacing.js`: The raw helper's setup, readback and cleanup requests, the SDK's own requests inside harness processes, discovery, asset reads and supervised children. Requests to local loopback servers are not paced
 
 - Request starts are spaced by at least 750 ms, at most 80 starts a minute, with no initial burst. Set `FLUXERLY_LIVE_PACE_MS` to change the interval
 - The pacing state lives in `.env.test.pace.json` in the SDK folder, so it carries across the default and Effect modes, across the checks the runner starts and into the next run. Its `.env.test.pace.json.lock` file is created like the sandbox lock and never removed for another process. If one stays behind, confirm the process it records has stopped before removing it

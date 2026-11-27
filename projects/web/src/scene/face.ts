@@ -133,7 +133,8 @@ export function createFace(slot: HTMLElement): Face | null {
                 textures.push(texture)
             })
             resize()
-            await renderer.compileAsync(scene, camera)
+            if (renderer.getContext().getExtension("KHR_parallel_shader_compile")) await renderer.compileAsync(scene, camera)
+            else renderer.compile(scene, camera)
             if (released) throw new Error("released")
             // One upload a frame, so the page keeps moving while they land
             for (const texture of textures) {
