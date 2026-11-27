@@ -99,6 +99,12 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Notify search engines with IndexNow
+        id: indexnow
+        # IndexNow being unavailable shouldn't fail a verified website deployment
+        continue-on-error: true
+        run: node scripts/indexnow.mjs
+        working-directory: projects/web
       - name: Summarize website delivery
         if: always()
         uses: $/.github/actions/summary
@@ -108,7 +114,7 @@ jobs:
           checks: '{"Release snapshots verified": "snapshots", "SDK declarations build": "build", "Public site build and checks": "workspace", "Check passed for this source": "ci", "Checked source recorded": "source", "Deploy and verification": "deploy"}'
           results: '{"workspace": "${{ runner.temp }}/public-checks.json"}'
           details: >-
-            {"Checked source commit": ${{ toJSON(env.DOCS_SOURCE_COMMIT) }}, "Reused Check run": ${{ toJSON(steps.ci.outputs.run_url) }}, "Exact deployment URL": ${{ toJSON(steps.deploy.outputs.deployment_url) }}, "Custom-domain access": ${{ toJSON(steps.deploy.outputs.custom_domain_status == 'verified' && 'Verified' || steps.deploy.outputs.custom_domain_status == 'challenged' && 'Cloudflare challenge, public access not verified' || 'Unconfirmed, inspect deployment verification') }}}
+            {"Checked source commit": ${{ toJSON(env.DOCS_SOURCE_COMMIT) }}, "Reused Check run": ${{ toJSON(steps.ci.outputs.run_url) }}, "Exact deployment URL": ${{ toJSON(steps.deploy.outputs.deployment_url) }}, "Custom-domain access": ${{ toJSON(steps.deploy.outputs.custom_domain_status == 'verified' && 'Verified' || steps.deploy.outputs.custom_domain_status == 'challenged' && 'Cloudflare challenge, public access not verified' || 'Unconfirmed, inspect deployment verification') }}, "IndexNow notification": ${{ toJSON(steps.indexnow.outputs.status == 'submitted' && format('Submitted {0} URLs (HTTP {1})', steps.indexnow.outputs.url_count, steps.indexnow.outputs.http_status) || 'Skipped or failed, inspect step log') }}}
           next: Open https://fluxerly.neontechspace.com to look at the deployed site
           failure: The live site changes only when the deploy step passes. Fix the failed step and run Website again
           reproduce: |-
