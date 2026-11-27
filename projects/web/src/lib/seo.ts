@@ -19,7 +19,7 @@ export const shareImage = {
     url: `${siteUrl}/og-image.jpg`,
     width: 1200,
     height: 630,
-    alt: "Fluxerly.js, a Fluxer-native bot SDK: a few lines of bot code and the conductor mascot answering Pong!",
+    alt: "Fluxerly.js, a Fluxer-native bot SDK for JavaScript, TypeScript and Effect, with the cosmic conductor floating above cyan-lit midnight water",
 }
 
 type Node = Record<string, unknown>

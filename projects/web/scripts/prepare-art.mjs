@@ -437,12 +437,12 @@ async function writeBadgeGlow() {
 // mascot also comes at 876 and no screen downloads the largest for nothing. src/lib/art.ts lists the same widths
 const mascotWidths = [1168, 876, 584]
 
-// The share picture every page's link preview shows, from the social preview at the size link previews ask for, and the favicon at
-// the sizes browsers, phones and search results ask for, from the one drawing in public/favicon.svg
-const socialPreview = `${originals}fluxerly-github-social.png`
+// The share picture every page's link preview shows, from the dedicated OG master at the size link previews ask for, and the
+// favicon at the sizes browsers, phones and search results ask for, from the one drawing in public/favicon.svg
+const ogPreview = `${originals}fluxerly-og.png`
 
 async function writeSiteIcons() {
-    await sharp(socialPreview).resize(1200, 630, { fit: "cover", position: "centre" }).flatten().jpeg({ quality: 90, mozjpeg: true }).toFile(fileURLToPath(new URL("../public/og-image.jpg", import.meta.url)))
+    await sharp(ogPreview).resize(1200, 630, { fit: "cover", position: "centre" }).flatten().jpeg({ quality: 90, mozjpeg: true }).toFile(fileURLToPath(new URL("../public/og-image.jpg", import.meta.url)))
     const drawing = await readFile(new URL("../public/favicon.svg", import.meta.url))
     const write = (size, name) => sharp(drawing, { density: 72 * (size / 32) }).resize(size, size).png({ compressionLevel: 9 }).toFile(fileURLToPath(new URL(`../public/${name}`, import.meta.url)))
     await write(48, "favicon-48.png")
