@@ -78,23 +78,34 @@ const { accent } = Astro.props
        intros stayed at the top of a long scene and left their column empty beside the code */
     .space {
         position: relative;
-        isolation: isolate;
         overflow: clip;
         padding-bottom: clamp(96px, 6.6vw, 128px);
         background: linear-gradient(to bottom, #060a24 0%, #04061c 26%, var(--color-night) 60%, #03040f 100%);
     }
 
-    /* The page's voice glows faintly above its title, and the other voice answers further down */
+    /* The page's voice glows faintly above its title, and the other voice answers further down. It fades out
+       before the footer so shorter pages never show a straight cut where space gives way to it */
     .space::before {
         content: "";
         position: absolute;
         inset: 0;
-        z-index: -1;
+        z-index: 0;
         pointer-events: none;
         background:
             radial-gradient(48vw 560px at 78% 120px, color-mix(in srgb, var(--accent) 11%, transparent), transparent 70%),
             radial-gradient(38vw 480px at 6% 38%, rgb(61 112 204 / 0.07), transparent 72%),
             radial-gradient(44vw 520px at 92% 72%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 72%);
+        mask-image: linear-gradient(to bottom, #000 calc(100% - 160px), transparent 100%);
+    }
+
+    .space > :global(.field),
+    .space :global(.far) {
+        z-index: 0;
+    }
+
+    .space > :global(section) > :global(:is(.page-grid, .split)) {
+        position: relative;
+        z-index: 2;
     }
 
     .space[data-accent="cyan"] {
@@ -108,7 +119,7 @@ const { accent } = Astro.props
     .motes {
         position: absolute;
         inset: 0;
-        z-index: -1;
+        z-index: 1;
         overflow: hidden;
         pointer-events: none;
     }

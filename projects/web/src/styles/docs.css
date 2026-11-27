@@ -317,10 +317,19 @@ body.docs .site-header::before {
     transition: top var(--speed-slow) cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
-/* The footer rides over the floating sidebar and outline, on the night's own color */
+/* The footer rides over the floating sidebar and outline, on the night's own color, and softens where the water meets it */
 .docs .site-footer {
     z-index: 2;
     background: var(--color-night);
+}
+
+.docs .site-footer::before {
+    content: "";
+    position: absolute;
+    inset: -48px 0 auto;
+    height: 48px;
+    background: linear-gradient(to bottom, rgb(4 5 26 / 0), var(--color-night));
+    pointer-events: none;
 }
 
 /* A station opened before the first frame opens at once, so the course never shifts under the reader after load */
@@ -869,10 +878,12 @@ html[data-course-settling] .course-station::details-content {
     text-decoration-color: color-mix(in srgb, var(--accent-bright) 58%, transparent);
 }
 
-.crumbs a + a::before {
+.crumbs a:not(:last-child)::after {
     content: "/";
+    display: inline-block;
     margin-inline: 10px;
     color: var(--ink-faint);
+    text-decoration: none;
 }
 
 /* Copying the page as Markdown stays quiet under the lead. It's a tool, not part of the reading */

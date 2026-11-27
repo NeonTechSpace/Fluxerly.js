@@ -1006,7 +1006,6 @@ const { stops } = Astro.props
         --log-reach: 58px;
 
         position: relative;
-        isolation: isolate;
         /* Clip, not hidden: hidden makes the night its own scroll container, which an anchor jump or scrollIntoView
            scrolls inside, moving the sections away from the line's stations, and which keeps the sections' sticky
            intros from following the reader */
@@ -1018,8 +1017,19 @@ const { stops } = Astro.props
         background:
             radial-gradient(42vw 520px at 88% 900px, rgb(165 124 255 / 0.06), transparent 70%),
             radial-gradient(38vw 480px at 8% 46%, rgb(61 112 204 / 0.06), transparent 72%),
-            radial-gradient(46vw 420px at 70% calc(100% - 200px), rgb(70 227 239 / 0.05), transparent 72%),
+            radial-gradient(46vw 420px at 70% calc(100% - 330px), rgb(70 227 239 / 0.05), transparent 72%),
             linear-gradient(to bottom, #050820 0, #04061c 30%, var(--color-night) 60%, #03040f 100%);
+    }
+
+    /* Stars and far bodies sit behind the ambient light and the footer's rising sea floor, while section content stays above them */
+    .night > :global(.field),
+    .night :global(.far) {
+        z-index: 0;
+    }
+
+    .night > :global(section) > :global(:is(.page-grid, .split)) {
+        position: relative;
+        z-index: 2;
     }
 
     /* A far body lags behind the page, so near the top of the page it sits higher than where it was placed and is
@@ -1029,7 +1039,7 @@ const { stops } = Astro.props
         content: "";
         position: absolute;
         inset: 0 0 auto;
-        z-index: -1;
+        z-index: 1;
         height: 360px;
         background: linear-gradient(to bottom, #050820 25%, rgb(5 8 32 / 0));
         pointer-events: none;
@@ -1052,7 +1062,7 @@ const { stops } = Astro.props
         /* A fixed reach, not a share of the night's height, which would move the beams as the page takes its
            final height and count as a layout shift */
         inset: 0 -10% auto;
-        z-index: -1;
+        z-index: 1;
         height: 1500px;
         pointer-events: none;
         transform-origin: 50% 0;
@@ -1087,7 +1097,7 @@ const { stops } = Astro.props
     .motes {
         position: absolute;
         inset: 0;
-        z-index: -1;
+        z-index: 1;
         overflow: hidden;
         pointer-events: none;
     }
@@ -1136,7 +1146,7 @@ const { stops } = Astro.props
         position: absolute;
         top: 0;
         left: 0;
-        z-index: -1;
+        z-index: 1;
         width: 0;
         height: 0;
         pointer-events: none;
@@ -1177,7 +1187,7 @@ const { stops } = Astro.props
        light reaches and only moves and fades its dots */
     .night :global(.panel-light) {
         position: absolute;
-        z-index: 1;
+        z-index: 3;
         pointer-events: none;
     }
 
@@ -1252,7 +1262,7 @@ const { stops } = Astro.props
         position: absolute;
         top: 0;
         left: 0;
-        z-index: -1;
+        z-index: 1;
         width: 100%;
         height: 200%;
         overflow: clip;
@@ -1318,7 +1328,7 @@ const { stops } = Astro.props
     }
 
     .thread-stations {
-        z-index: -1;
+        z-index: 1;
     }
 
     .thread-line,
@@ -1368,7 +1378,7 @@ const { stops } = Astro.props
     .nebula {
         position: absolute;
         inset: 0 0 auto;
-        z-index: -1;
+        z-index: 1;
         height: 1100px;
         pointer-events: none;
         animation: caustics 28s ease-in-out infinite alternate paused;

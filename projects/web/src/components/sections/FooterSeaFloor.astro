@@ -284,6 +284,7 @@ const bubbles = columns.map((x, index) => ({
         right: 0;
         bottom: 0;
         left: 0;
+        z-index: 1;
         height: var(--reach);
         overflow: clip;
         pointer-events: none;
@@ -302,7 +303,8 @@ const bubbles = columns.map((x, index) => ({
         mask-image: linear-gradient(to top, transparent, #000 20%, #000 55%, transparent);
     }
 
-    /* The beams have their own room, which stays tall on a phone, where the bubbles keep to their short band */
+    /* The beams have their own room, which stays tall on a phone, where the bubbles keep to their short band.
+       The fade at the floor keeps a tilted beam from cutting off along the footer rule */
     .beams {
         --reach: min(92vh, 860px);
 
@@ -310,9 +312,11 @@ const bubbles = columns.map((x, index) => ({
         right: 0;
         bottom: 0;
         left: 0;
+        z-index: 1;
         height: var(--reach);
         overflow: clip;
         pointer-events: none;
+        mask-image: linear-gradient(to top, transparent, #000 13%, #000 74%, transparent);
     }
 
     @media (any-pointer: coarse), (max-width: 1279px) {
@@ -449,6 +453,7 @@ const bubbles = columns.map((x, index) => ({
         --stands: clamp(190px, 20vw, 320px);
 
         position: relative;
+        z-index: 1;
         height: var(--stands);
         pointer-events: none;
     }
@@ -457,7 +462,7 @@ const bubbles = columns.map((x, index) => ({
     .conductor {
         position: absolute;
         left: 50%;
-        top: 12%;
+        top: 10%;
         width: calc(var(--stands) * 0.632);
         aspect-ratio: 1168 / 1676;
         translate: -50% 0;

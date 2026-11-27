@@ -39,17 +39,6 @@ const nightlyVersion = process.env.PLAYGROUND_NIGHTLY_VERSION || undefined
 </Site>
 
 <style>
-    /* Let the playground shell sit above the footer's rising sea floor while keeping the footer itself untouched */
-    :global(.space:has(.playground-page)) {
-        isolation: auto;
-    }
-
-    :global(.space:has(.playground-page))::before,
-    :global(.space:has(.playground-page) > .field),
-    :global(.space:has(.playground-page) > .motes) {
-        z-index: 0;
-    }
-
     .playground-page {
         padding-top: 82px;
         padding-bottom: 32px;

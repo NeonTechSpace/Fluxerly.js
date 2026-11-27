@@ -10,7 +10,7 @@ interface Props {
 const { plain = false } = Astro.props
 ---
 
-<footer class="site-footer">
+<footer class="site-footer" data-plain={plain || undefined}>
     {!plain && <FooterSeaFloor />}
     <div class="row">
         <div class="brand">
@@ -34,14 +34,15 @@ const { plain = false } = Astro.props
 </footer>
 
 <style>
-    :global(.docs) .site-footer {
-        background: var(--color-night);
-    }
-
     /* The footer's row and its rule line up with the content's edges, not the window's */
     .site-footer {
         /* Starts in the dark space ends in, across the whole width, so no edge shows where the page gives way to it */
         background: linear-gradient(to bottom, #03040f, var(--color-night) clamp(150px, 17vw, 260px));
+    }
+
+    .site-footer[data-plain],
+    :global(.docs) .site-footer {
+        background: var(--color-night);
     }
 
     .row,
