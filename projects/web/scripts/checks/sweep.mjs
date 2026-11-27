@@ -473,6 +473,10 @@ part("water", ["/docs/commands/"], async () => {
                 .map((box) => ({ x: Math.max(0, box.left), y: Math.max(0, box.top), right: Math.min(innerWidth, box.right), bottom: Math.min(innerHeight, box.bottom) }))
                 .filter((box) => box.right - box.x > 1 && box.bottom - box.y > 1)
             if (!columns.length) return []
+            for (const bubble of document.querySelectorAll(".docs-bubble")) {
+                // Pin each bubble's own animation-delay so a late pagereveal updating --water-t on .docs-night cannot shift it
+                if (bubble instanceof HTMLElement) bubble.style.animationDelay = "0ms"
+            }
             for (const animation of document.getAnimations()) animation.pause()
             let crossing = 0
             for (const bubble of document.querySelectorAll(".docs-bubble")) {
@@ -518,11 +522,10 @@ part("water", ["/docs/commands/"], async () => {
     const { context, page } = await openPage({ width: 1920, height: 1080 }, "immersive")
     await page.goto(`${site.url}/docs/commands/`, { waitUntil: "load" })
     const clip = await page.evaluate(async () => {
-        // Freeze the water's clock phase so the bubble lands at the same height on every run instead of following Date.now()
-        const night = document.querySelector(".docs-night")
-        if (night instanceof HTMLElement) night.style.setProperty("--water-t", "0ms")
-        for (const animation of document.getAnimations()) animation.pause()
         const bubble = document.querySelector('.docs-bubble:has(use[href="#crystal-gold"])')
+        // Override animation-delay directly on the bubble so a late pagereveal writing --water-t on .docs-night cannot teleport it mid-check
+        if (bubble instanceof HTMLElement) bubble.style.animationDelay = "0ms"
+        for (const animation of document.getAnimations()) animation.pause()
         for (const element of document.querySelectorAll(".docs-main, .ray, .docs-bubble")) {
             if (element !== bubble) element.style.visibility = "hidden"
         }
