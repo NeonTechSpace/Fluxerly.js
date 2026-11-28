@@ -370,13 +370,15 @@ async function main() {
     const { kept, leftOut } = botSurface(specOperations(JSON.parse(source.openapi.toString("utf8"))))
 
     const docs = readDocs(source)
-    const { sdkOperations } = await import("./sdk-routes.mjs")
     const model = JSON.parse(await readFile(join(referenceDir, "model.json"), "utf8"))
     const reference = referenceResolver(model)
     const effect = referenceResolver(model, "effect")
     // The map links methods the site's reference documents. A method the SDK source has gained since the reference was
     // extracted waits for the next extraction
-    const found = sdkOperations(sdk).filter((operation) => !operation.name.includes("[") && operation.routes.length + operation.unresolved.length)
+    const precomputed = process.env.DOCS_SDK_ROUTES
+        ? JSON.parse(await readFile(resolve(process.env.DOCS_SDK_ROUTES), "utf8"))
+        : (await import("./sdk-routes.mjs")).sdkOperations(sdk)
+    const found = precomputed.filter((operation) => !operation.name.includes("[") && operation.routes.length + operation.unresolved.length)
     const operations = found.filter((operation) => reference(referencePath(operation.name)))
     const unreferenced = found.filter((operation) => !reference(referencePath(operation.name))).map((operation) => operation.name)
     if (unreferenced.length) console.warn(`Not in the reference yet, run pnpm run generate to include them (${unreferenced.length}):\n  ${unreferenced.join("\n  ")}`)

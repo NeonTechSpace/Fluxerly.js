@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { spawnSync } from "node:child_process"
+import { spawn } from "node:child_process"
 import {
     copyFileSync,
     existsSync,
@@ -17,6 +17,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { stripVTControlCharacters } from "node:util"
 import { format } from "prettier"
+import { goMaxProcsFor, parallelLanes } from "../../../scripts/concurrency.mjs"
 import { stageRelease } from "../../scripts/packages.js"
 import { authoredGuides } from "../../../web/scripts/docs/guide-files.mjs"
 import { javascriptTwin } from "../../../web/scripts/docs/remark-guides.mjs"
@@ -30,6 +31,32 @@ const compiler = join(dirname(require.resolve("typescript/package.json")), "bin/
 const pnpm = process.env.npm_execpath
 assert.ok(pnpm, "Run the package check through pnpm run test:package")
 console.log(`Packed consumer check runtime: Node ${process.version}`)
+
+// Dynamic lane budgets: 1 lane on 2 to 4 core local hosts, bounded parallel lanes on multi-core and CI
+const heavyLimit = parallelLanes({ envVar: "FLUXERLY_PACKAGE_CONCURRENCY", perLaneCores: 3, max: 4 })
+const lightLimit = parallelLanes({ envVar: "FLUXERLY_PACKAGE_CONCURRENCY", perLaneCores: 2, max: 6 })
+const tscEnv =
+    heavyLimit > 1 && !process.env.GOMAXPROCS
+        ? { ...process.env, GOMAXPROCS: String(goMaxProcsFor(heavyLimit)) }
+        : process.env
+
+function createSemaphore(limit) {
+    let free = Math.max(1, limit)
+    const queue = []
+    return async (work) => {
+        if (free === 0) await new Promise((done) => queue.push(done))
+        free -= 1
+        try {
+            return await work()
+        } finally {
+            free += 1
+            queue.shift()?.()
+        }
+    }
+}
+
+const heavySlot = createSemaphore(heavyLimit)
+const lightSlot = createSemaphore(lightLimit)
 
 // SDK log records and supervised child lines from passing consumers stay out of the report
 const sdkOutputLine =
@@ -50,35 +77,64 @@ function withoutSdkOutput(text) {
 }
 
 /** Run a command and return its standard output. A failure carries everything the command printed, SDK records included */
-function run(command, args, cwd, timeout = 120_000, env = process.env) {
-    const result = spawnSync(command, args, {
-        cwd,
-        env,
-        timeout,
-        encoding: "utf8",
-        windowsHide: true,
-        maxBuffer: 64 * 1024 * 1024,
+function runRaw(command, args, cwd, timeout = 120_000, env = process.env) {
+    return new Promise((done, fail) => {
+        const child = spawn(command, args, {
+            cwd,
+            env,
+            windowsHide: true,
+        })
+        const stdoutChunks = []
+        const stderrChunks = []
+        let timedOut = false
+        let settled = false
+        const timer = setTimeout(() => {
+            timedOut = true
+            child.kill()
+        }, timeout)
+        child.stdout.on("data", (chunk) => stdoutChunks.push(chunk))
+        child.stderr.on("data", (chunk) => stderrChunks.push(chunk))
+        const finish = (error, status, signal) => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            const stdout = Buffer.concat(stdoutChunks).toString("utf8")
+            const stderr = Buffer.concat(stderrChunks).toString("utf8")
+            const failure =
+                error ?? (timedOut ? Object.assign(new Error("ETIMEDOUT"), { code: "ETIMEDOUT" }) : undefined)
+            if (failure || status !== 0) {
+                const outcome = failure ? String(failure) : `exit ${status ?? signal}`
+                fail(
+                    Object.assign(
+                        new Error(
+                            `Command failed (${outcome}): ${[command, ...args].join(" ")}\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
+                            { cause: failure },
+                        ),
+                        { status, signal, stdout, stderr },
+                    ),
+                )
+                return
+            }
+            process.stderr.write(withoutSdkOutput(stderr))
+            done(stdout)
+        }
+        child.on("error", (error) => finish(error, null, null))
+        child.on("close", (code, signal) => finish(undefined, code, signal))
     })
-    const stdout = result.stdout ?? ""
-    const stderr = result.stderr ?? ""
-    if (result.error || result.status !== 0) {
-        const outcome = result.error ? String(result.error) : `exit ${result.status ?? result.signal}`
-        throw Object.assign(
-            new Error(
-                `Command failed (${outcome}): ${[command, ...args].join(" ")}\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
-                { cause: result.error },
-            ),
-            { status: result.status, signal: result.signal, stdout, stderr },
-        )
-    }
-    process.stderr.write(withoutSdkOutput(stderr))
-    return stdout
 }
 
-function packageManager(args, cwd, timeout) {
+const runLight = (command, args, cwd, timeout = 120_000, env = process.env) =>
+    lightSlot(() => runRaw(command, args, cwd, timeout, env))
+const runHeavy = (command, args, cwd, timeout = 120_000, env = process.env) =>
+    heavySlot(() => runRaw(command, args, cwd, timeout, env))
+const runCompiler = (args, cwd, timeout = 120_000) =>
+    runHeavy(process.execPath, [compiler, ...args], cwd, timeout, tscEnv)
+
+function packageManager(args, cwd, timeout = 120_000, { heavy = true } = {}) {
+    const runner = heavy ? runHeavy : runLight
     return /\.[cm]?js$/.test(pnpm)
-        ? run(process.execPath, [pnpm, ...args], cwd, timeout)
-        : run(pnpm, args, cwd, timeout)
+        ? runner(process.execPath, [pnpm, ...args], cwd, timeout)
+        : runner(pnpm, args, cwd, timeout)
 }
 
 function examples(source) {
@@ -288,17 +344,19 @@ const pairedExamples = repositoryExamples.filter(
             (other) => other.folder === example.folder && other.file === `${example.file.slice(0, -3)}.js`,
         ),
 )
-for (const { folder, file, source } of pairedExamples) {
-    const javascriptFile = `${file.slice(0, -3)}.js`
-    const javascript = repositoryExamples.find(
-        (example) => example.folder === folder && example.file === javascriptFile,
-    )
-    assert.equal(
-        await javascriptProgram(javascript.source),
-        await javascriptProgram(javascriptVariant(source)),
-        `examples/${folder}/${javascriptFile} must be the JavaScript variant of ${file}`,
-    )
-}
+await Promise.all(
+    pairedExamples.map(async ({ folder, file, source }) => {
+        const javascriptFile = `${file.slice(0, -3)}.js`
+        const javascript = repositoryExamples.find(
+            (example) => example.folder === folder && example.file === javascriptFile,
+        )
+        assert.equal(
+            await javascriptProgram(javascript.source),
+            await javascriptProgram(javascriptVariant(source)),
+            `examples/${folder}/${javascriptFile} must be the JavaScript variant of ${file}`,
+        )
+    }),
+)
 const repositoryExampleCounts = Object.fromEntries(
     ["default", "effect"].map((kind) => [kind, repositoryExamples.filter((example) => example.kind === kind).length]),
 )
@@ -371,7 +429,7 @@ function assertDefaultDeclarationsAvoidEffect(installed) {
             .map((specifier) => `${relative(installed, file)} -> ${specifier}`),
     )
     assert.deepEqual(offenders, [], "Default declarations must not import effect")
-    // Guard the walk itself: the native entry point must reach effect through the same traversal
+    // Guard the walk itself: The native entry point must reach effect through the same traversal
     assert.ok(
         [...declarationImports(installed, "effect").values()].some((external) => external.includes("effect")),
         "Declaration import walk did not find the native entry point's effect import",
@@ -384,9 +442,776 @@ assert.equal(buildOptions.removeComments, undefined, "The build must keep public
 assert.equal(buildOptions.stripInternal, undefined, "The build must keep every public declaration")
 
 // The compiler options of the generated TypeScript starter, read once its own check script passed
-let starterCompilerOptions
+const starterOptionsDeferred = Promise.withResolvers()
+// Suppress unhandled rejection if init-ts fails while another parallel branch rejects first
+starterOptionsDeferred.promise.catch(() => undefined)
+
 const temporaryRoot = realpathSync(tmpdir())
 const temporary = mkdtempSync(join(temporaryRoot, "fluxerly-package-check-"))
+
+async function checkInitSuite(installed, tarball) {
+    const cli = join(installed, "dist/cli.js")
+    const effectVersion = manifest.peerDependencies.effect.replace(/^\^/, "")
+    // Each starter runs under another package manager, whose commands its next steps name
+    const initManagers = {
+        js: {
+            userAgent: "npm/11.0.0 node/v24.0.0",
+            add: "npm install",
+            exact: "--save-exact",
+            dev: "--save-dev",
+        },
+        ts: {
+            userAgent: "pnpm/10.0.0 npm/? node/v24.0.0",
+            add: "pnpm add",
+            exact: "--save-exact",
+            dev: "--save-dev",
+        },
+        effect: { userAgent: "bun/1.3.0 npm/? node/v24.0.0", add: "bun add", exact: "--exact", dev: "--dev" },
+    }
+
+    const checkInvalidTemplate = async () => {
+        const invalid = join(temporary, "init-invalid")
+        mkdirSync(invalid)
+        await assert.rejects(
+            () => runLight(process.execPath, [cli, "init", "--template", "rust"], invalid),
+            (error) => error.status === 1 && error.stderr.includes("--template js|ts|effect"),
+            "An unknown template prints the usage and fails",
+        )
+        assert.deepEqual(readdirSync(invalid), [], "An unknown template writes nothing")
+    }
+
+    const checkNoManager = async () => {
+        // An install whose package manager cannot start keeps the starter and prints the install commands. An
+        // empty PATH removes every manager without needing the network
+        const noManager = join(temporary, "init-no-manager")
+        const emptyPath = join(temporary, "empty-path")
+        mkdirSync(noManager)
+        mkdirSync(emptyPath)
+        const withoutManagers = Object.fromEntries(
+            Object.entries(process.env).filter(([name]) => !/^path$/i.test(name)),
+        )
+        await assert.rejects(
+            () =>
+                runLight(process.execPath, [cli, "init"], noManager, 120_000, {
+                    ...withoutManagers,
+                    PATH: emptyPath,
+                    npm_config_user_agent: "pnpm/10.0.0 npm/? node/v24.0.0",
+                }),
+            (error) =>
+                error.status === 1 &&
+                /Installing with pnpm failed/.test(error.stderr) &&
+                error.stdout.includes("pnpm add") &&
+                error.stdout.includes(`${manifest.name}@${manifest.version}`),
+            "fluxerly init reports an install whose package manager cannot start",
+        )
+        assert.ok(
+            ["package.json", "bot.js", ".env"].every((name) => readdirSync(noManager).includes(name)),
+            "A failed install keeps the written starter",
+        )
+    }
+
+    const checkTemplate = async (template) => {
+        const starter = join(temporary, `init-${template}`)
+        mkdirSync(starter)
+        const initManager = initManagers[template]
+        const initEnvironment = { ...process.env, npm_config_user_agent: initManager.userAgent }
+        const exactFlag = manifest.version.includes("-") ? ` ${initManager.exact}` : ""
+        // Without a terminal, init writes the JavaScript starter unless --template names another one. The
+        // check installs the packed tarball itself, so init installs nothing
+        const initArguments = ["init", "--no-install", ...(template === "js" ? [] : ["--template", template])]
+        const initOutput = await runLight(process.execPath, [cli, ...initArguments], starter, 120_000, initEnvironment)
+        assert.ok(
+            readdirSync(starter).includes(template === "js" ? "bot.js" : "bot.ts"),
+            `fluxerly ${initArguments.join(" ")} writes the ${template} starter`,
+        )
+        assert.equal(
+            readFileSync(join(starter, ".env"), "utf8"),
+            readFileSync(join(starter, ".env.example"), "utf8"),
+            "fluxerly init copies .env.example to .env",
+        )
+        assert.ok(
+            initOutput.includes(`${initManager.add}${exactFlag} ${manifest.name}@${manifest.version}`),
+            "fluxerly init prints the install of the installed version with the detected package manager",
+        )
+        assert.equal(
+            initOutput.includes(`${initManager.add} effect@${effectVersion}`),
+            template === "effect",
+            "Only the Effect starter's next steps install Effect",
+        )
+        assert.equal(
+            initOutput.includes(`${initManager.add} ${initManager.dev} @types/node`),
+            template !== "js",
+            "Only the TypeScript starters' next steps install the Node.js types",
+        )
+        assert.equal(
+            initOutput.includes("typescript@7"),
+            template !== "js",
+            "Only the TypeScript starters' next steps install TypeScript",
+        )
+        await assert.rejects(
+            () => runLight(process.execPath, [cli, ...initArguments], starter, 120_000, initEnvironment),
+            (error) => error.status === 1 && /already exist.*wrote nothing/.test(error.stderr),
+            "A second fluxerly init refuses the existing files",
+        )
+        writeFileSync(join(starter, "pnpm-workspace.yaml"), "allowBuilds:\n  msgpackr-extract: false\n")
+        const dependencies = [`file:${tarball.replaceAll("\\", "/")}`]
+        if (template === "effect") dependencies.push(`effect@${effectVersion}`)
+        await packageManager(["add", ...dependencies, "--prefer-offline", "--ignore-scripts"], starter)
+        if (template !== "js") {
+            // The pinned SDK types and compiler keep this check reproducible where the printed step takes
+            // the latest
+            await packageManager(
+                [
+                    "add",
+                    "--save-dev",
+                    `@types/node@${manifest.devDependencies["@types/node"]}`,
+                    `typescript@${manifest.devDependencies.typescript}`,
+                    "--prefer-offline",
+                    "--ignore-scripts",
+                ],
+                starter,
+            )
+            // The generated check script runs the compiler on the generated tsconfig.json and passes without
+            // changes
+            await packageManager(["run", "check"], starter)
+            if (template === "ts") {
+                starterOptionsDeferred.resolve(
+                    JSON.parse(readFileSync(join(starter, "tsconfig.json"), "utf8")).compilerOptions,
+                )
+            }
+        }
+        // node --test passes when it finds no test file, so the report must show the generated test passing
+        assert.match(
+            stripVTControlCharacters(await packageManager(["test"], starter, 120_000, { heavy: false })),
+            /^(?:#|ℹ) pass 1$/m,
+        )
+
+        // A first test must explain a broken command and must end on a stuck one. Each case swaps the starter's
+        // command body, and the stuck case also shortens the generated timeout
+        const botFile = join(starter, template === "js" ? "bot.js" : "bot.ts")
+        const healthyBot = readFileSync(botFile, "utf8")
+        const withCommand = (body) => {
+            const changed = healthyBot.replace('({ reply }) => reply("Pong!")', body)
+            assert.notEqual(changed, healthyBot, `The ${template} starter's command body moved`)
+            writeFileSync(botFile, changed)
+        }
+        const thrownText = "starter-check-thrown-text"
+        withCommand(
+            template === "effect"
+                ? `() => Effect.die(new Error("${thrownText}"))`
+                : `() => { throw new Error("${thrownText}") }`,
+        )
+        await assert.rejects(
+            () => packageManager(["test"], starter, 120_000, { heavy: false }),
+            (error) => error.status === 1 && `${error.stdout}${error.stderr}`.includes(thrownText),
+            `The ${template} starter's test must fail with the text its command threw`,
+        )
+        const generatedManifest = JSON.parse(readFileSync(join(starter, "package.json"), "utf8"))
+        const shortened = generatedManifest.scripts.test.replace("--test-timeout=30000", "--test-timeout=2000")
+        assert.notEqual(shortened, generatedManifest.scripts.test, "The generated test script sets a timeout")
+        writeFileSync(
+            join(starter, "package.json"),
+            JSON.stringify({
+                ...generatedManifest,
+                scripts: { ...generatedManifest.scripts, test: shortened },
+            }),
+        )
+        withCommand(template === "effect" ? "() => Effect.never" : "() => new Promise(() => {})")
+        // The hang guard is well past the shortened timeout, and a hang ends with no exit status
+        await assert.rejects(
+            () => packageManager(["test"], starter, 60_000, { heavy: false }),
+            (error) => error.status === 1,
+            `The ${template} starter's test script must end a test whose command never settles`,
+        )
+        console.log(`fluxerly init ${template} starter project passed its generated test`)
+    }
+
+    await Promise.all([
+        checkInvalidTemplate(),
+        checkNoManager(),
+        checkTemplate("js"),
+        checkTemplate("ts").catch((error) => {
+            starterOptionsDeferred.reject(error)
+            throw error
+        }),
+        checkTemplate("effect"),
+    ])
+}
+
+async function checkConsumer(kind, staged, files, tarball) {
+    const consumer = join(temporary, kind)
+    mkdirSync(consumer)
+    const dependencies = { [manifest.name]: `file:${tarball.replaceAll("\\", "/")}` }
+    // Exercise the supported peer floor rather than silently selecting a newer compatible release
+    if (kind === "effect") dependencies.effect = manifest.peerDependencies.effect.replace(/^\^/, "")
+    writeFileSync(
+        join(consumer, "package.json"),
+        JSON.stringify({
+            private: true,
+            type: "module",
+            dependencies,
+            devDependencies: { "@types/node": manifest.devDependencies["@types/node"] },
+        }),
+    )
+    writeFileSync(join(consumer, "pnpm-workspace.yaml"), "allowBuilds:\n  msgpackr-extract: false\n")
+    await packageManager(["install", "--prefer-offline", "--ignore-scripts", "--strict-peer-dependencies"], consumer)
+
+    const installed = join(consumer, "node_modules", manifest.name)
+    for (const path of files) {
+        assert.deepEqual(
+            readFileSync(join(installed, path)),
+            readFileSync(join(staged.npm.directory, path)),
+            `Packed bytes differ from staged ${path}`,
+        )
+    }
+    for (const path of ["README.md", "agents/AGENTS.md", "agents/TRIAGE.md"]) {
+        assert.equal(readFileSync(join(installed, path), "utf8"), readFileSync(join(sdk, path), "utf8"))
+    }
+    assert.deepEqual(readFileSync(join(installed, "LICENSE")), readFileSync(join(sdk, "../../LICENSE")))
+    // The SDK is ESM-only, so require() must reach the explanatory module rather than fail to resolve
+    for (const specifier of [
+        manifest.name,
+        `${manifest.name}/effect`,
+        `${manifest.name}/testing`,
+        `${manifest.name}/effect/testing`,
+    ])
+        assert.throws(
+            () => createRequire(join(consumer, "package.json"))(specifier),
+            (error) => error.constructor === Error && error.code === undefined && /ESM-only/.test(error.message),
+        )
+
+    const tasks = []
+    if (kind === "default") {
+        // The installed command writes the rules into the application's AGENTS.md, as the guides instruct
+        await packageManager(["exec", "fluxerly", "agents"], consumer, 120_000, { heavy: false })
+        const agents = readFileSync(join(consumer, "AGENTS.md"), "utf8")
+        assert.ok(
+            agents.includes(`@neontechspace/fluxerly ${manifest.version}`),
+            "AGENTS.md names the installed version",
+        )
+        assert.ok(
+            agents.includes("run `pnpm exec fluxerly agents` to refresh"),
+            "AGENTS.md names the project's command",
+        )
+        assert.ok(agents.includes("1. Import only from"), "AGENTS.md contains the rules")
+        // Run the init starter projects in parallel with the rest of the consumer checks
+        tasks.push(checkInitSuite(installed, tarball))
+    }
+
+    const installedManifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"))
+    assert.ok(!installedManifest.private && !installedManifest.scripts && !installedManifest.devDependencies)
+    for (const field of ["peerDependencies", "peerDependenciesMeta", "imports", "engines"])
+        assert.deepEqual(installedManifest[field], manifest[field], `Packed ${field} differs from the source manifest`)
+    if (kind === "effect") {
+        const appRequire = createRequire(join(consumer, "package.json"))
+        const sdkRequire = createRequire(join(installed, "package.json"))
+        assert.equal(appRequire.resolve("effect"), sdkRequire.resolve("effect"), "Native consumer must share Effect")
+    }
+    const guideExample = [
+        ...readFileSync(join(installed, "agents/AGENTS.md"), "utf8").matchAll(/```ts\r?\n([\s\S]*?)```/g),
+    ]
+        .map((match) => match[1])
+        .filter((example) => example.includes('from "effect"') === (kind === "effect"))
+    assert.equal(guideExample.length, 1, `Expected one ${kind} example in the shipped agent guide`)
+    // Every declaration file the guide's task map names exists in the installed package
+    const guidePaths = [
+        ...readFileSync(join(installed, "agents/AGENTS.md"), "utf8").matchAll(/`(dist\/[\w/.-]+\.d\.ts)`/g),
+    ].map((match) => match[1])
+    assert.ok(guidePaths.length > 10, "Expected the shipped agent guide to map tasks to declaration files")
+    for (const path of guidePaths) assert.ok(existsSync(join(installed, path)), `The agent guide names missing ${path}`)
+    writeFileSync(join(consumer, "agent-guide.ts"), guideExample[0])
+    tasks.push(
+        runLight(
+            process.execPath,
+            [
+                "--input-type=module",
+                "--eval",
+                "import assert from 'node:assert/strict'; import { pathToFileURL } from 'node:url'; import { realpathSync } from 'node:fs'; assert.equal(import.meta.resolve('#sdk/internal/client'), pathToFileURL(realpathSync('dist/internal/client.js')).href)",
+            ],
+            installed,
+            10_000,
+        ),
+    )
+    // Each packed entry point starts with its source overview comment
+    const normalizeComment = (text) => text.replace(/\s+/g, " ").trim()
+    for (const entry of ["index", "effect"]) {
+        const overview = readFileSync(join(sdk, "src", `${entry}.ts`), "utf8").match(/^\/\*\*[\s\S]*?\*\//)?.[0]
+        assert.ok(overview?.includes("@packageDocumentation"), `Missing ${entry} entry-point overview`)
+        assert.ok(
+            normalizeComment(readFileSync(join(installed, `dist/${entry}.d.ts`), "utf8")).startsWith(
+                normalizeComment(overview),
+            ),
+            `Entry-point overview missing from packed dist/${entry}.d.ts`,
+        )
+    }
+    assertDefaultDeclarationsAvoidEffect(installed)
+    for (const file of files.filter((file) => file.endsWith(".map"))) {
+        const sourceMap = JSON.parse(readFileSync(join(installed, file), "utf8"))
+        assert.ok(sourceMap.sources.length > 0)
+        // Maps point at the shipped src/ files instead of embedding a second copy of every source
+        assert.equal(sourceMap.sourcesContent, undefined, `${file} embeds sources that src/ already ships`)
+        for (const source of sourceMap.sources) {
+            const resolved = resolve(installed, dirname(file), sourceMap.sourceRoot ?? "", source)
+            const packedPath = relative(installed, resolved)
+            assert.ok(!isAbsolute(packedPath) && packedPath !== ".." && !packedPath.startsWith(`..${sep}`))
+            assert.ok(existsSync(resolved))
+        }
+    }
+
+    for (const file of ["loopback.js", "starter.js"]) copyFileSync(join(fixtureDirectory, file), join(consumer, file))
+    if (kind === "default") {
+        assert.equal(existsSync(join(consumer, "node_modules/effect")), false)
+        const websiteGuide = websiteGuides.find((guide) => guide.slug === "quick-start").content
+        const websiteExamples = [...websiteGuide.matchAll(/```js\r?\n([\s\S]*?)```/g)]
+        assert.equal(websiteExamples.length, 1, "Expected one website bot block shared by JavaScript and TypeScript")
+        for (const file of ["bot.js", "bot.ts"]) {
+            assert.equal(
+                await normalizeJavaScriptExample(readFileSync(join(installed, "examples/starter", file), "utf8")),
+                await normalizeJavaScriptExample(websiteExamples[0][1]),
+                `The installed ${file} must match the rendered runnable starter`,
+            )
+        }
+        // The README bot is compiled with the starters rather than compared as text
+        const readmeExamples = [
+            ...readFileSync(join(installed, "README.md"), "utf8").matchAll(/```js\r?\n([\s\S]*?)```/g),
+        ]
+        assert.ok(readmeExamples.length > 0, "Expected a bot example in the packed README")
+        for (const [index, [, source]] of readmeExamples.entries())
+            writeFileSync(join(consumer, `readme-example-${index}.ts`), `${source}\nexport {}\n`)
+        for (const filename of ["bot.js", "bot.ts"]) {
+            writeFileSync(join(consumer, filename), websiteExamples[0][1])
+            tasks.push(
+                runLight(process.execPath, ["starter.js", kind, filename], consumer, 15_000).then((out) =>
+                    process.stdout.write(withoutSdkOutput(out)),
+                ),
+            )
+        }
+    }
+    if (kind === "effect") {
+        const starter = completeEffectStarter()
+        assert.equal(
+            starter.source.trim(),
+            readFileSync(join(installed, "examples/starter/bot-effect.ts"), "utf8").trim(),
+            "The rendered native starter must use the installed application source",
+        )
+        writeFileSync(join(consumer, "bot-effect.ts"), starter.source)
+        tasks.push(
+            runLight(process.execPath, ["starter.js", kind, "bot-effect.ts"], consumer, 15_000).then((out) =>
+                process.stdout.write(withoutSdkOutput(out)),
+            ),
+        )
+    }
+
+    copyFileSync(join(fixtureDirectory, `${kind}.js`), join(consumer, "consumer.js"))
+    copyFileSync(join(fixtureDirectory, "sharding-workflow.js"), join(consumer, "sharding-workflow.js"))
+    copyFileSync(join(fixtureDirectory, "testing.js"), join(consumer, "testing.js"))
+    copyFileSync(join(fixtureDirectory, "module-conformance.js"), join(consumer, "module-conformance.js"))
+    copyFileSync(
+        join(sdk, "tests/contract/module-conformance-registry.js"),
+        join(consumer, "module-conformance-registry.js"),
+    )
+    tasks.push(
+        runLight(process.execPath, ["--enable-source-maps", "consumer.js"], consumer, 10_000).then((out) =>
+            process.stdout.write(withoutSdkOutput(out)),
+        ),
+        runLight(process.execPath, ["--enable-source-maps", "sharding-workflow.js", kind], consumer, 15_000).then(
+            (out) => process.stdout.write(withoutSdkOutput(out)),
+        ),
+        runLight(process.execPath, ["testing.js", kind], consumer, 15_000).then((out) =>
+            process.stdout.write(withoutSdkOutput(out)),
+        ),
+        runLight(process.execPath, ["module-conformance.js", kind], consumer, 10_000).then((out) =>
+            process.stdout.write(withoutSdkOutput(out)),
+        ),
+    )
+
+    copyFileSync(join(fixtureDirectory, `${kind}.ts`), join(consumer, "consumer.ts"))
+    copyFileSync(join(fixtureDirectory, `testing-${kind}.ts`), join(consumer, "testing-consumer.ts"))
+    // Type-only consumers of exports that the entry point consumers above do not name
+    if (kind === "default") copyFileSync(join(fixtureDirectory, "logging.ts"), join(consumer, "logging.ts"))
+    if (kind === "effect") {
+        copyFileSync(join(fixtureDirectory, "message-fields.ts"), join(consumer, "message-fields.ts"))
+        copyFileSync(join(fixtureDirectory, "event-accounting.ts"), join(consumer, "event-accounting.ts"))
+    }
+    for (const file of ["builders-state.ts", "guild-feature-types.ts"])
+        writeFileSync(
+            join(consumer, file),
+            readFileSync(join(fixtureDirectory, file), "utf8").replaceAll(
+                '"@neontechspace/fluxerly"',
+                JSON.stringify(kind === "default" ? manifest.name : `${manifest.name}/effect`),
+            ),
+        )
+    // Each entry point re-exports its hand-written API modules, which hold the authored examples
+    const apiDirectory = join(sdk, "src/api", kind === "default" ? "default" : "effect")
+    const publicSource = [
+        join(sdk, "src", kind === "default" ? "index.ts" : "effect.ts"),
+        ...readdirSync(apiDirectory)
+            .filter((file) => file.endsWith(".ts"))
+            .sort()
+            .map((file) => join(apiDirectory, file)),
+    ]
+        .map((file) => readFileSync(file, "utf8"))
+        .join("\n")
+    // Examples that workflow.js imports from out/, and runnable programs checked with the starters
+    writeNamedExampleFixtures(consumer, publicSource, [
+        {
+            name: "optional-tools",
+            matches: (example) => /(?:function|const) installPing/.test(example),
+            file: () => "optional-tools-example.ts",
+        },
+        {
+            name: "commandGroupExample",
+            matches: (example) => example.includes("function commandGroupExample("),
+            file: () => "commandGroupExample.ts",
+        },
+        {
+            name: "runBot",
+            matches: (example) => /function pingBot\(/.test(example),
+            file: () => "run-bot-example.ts",
+        },
+    ])
+    writeNamedExampleFixtures(
+        consumer,
+        kind === "default" ? readFileSync(join(sdk, "src/client.ts"), "utf8") : publicSource,
+        [
+            {
+                name: "logging",
+                matches: (example) => /function loggingExample/.test(example),
+                file: () => "logging-example.ts",
+            },
+        ],
+    )
+    // Shared module examples import the default entry point and must also compile against the native one
+    const rewriteSharedExample = (example) =>
+        kind === "default"
+            ? example
+            : example.replaceAll('"@neontechspace/fluxerly"', '"@neontechspace/fluxerly/effect"')
+    for (const [file, pattern] of [
+        ["api-errors", /function formatApiErrorDetail/],
+        ["input-validation", /function readInputValidation/],
+        ["client", /function selectedMessagesExample/],
+        ["expressions", /function expressionExample/],
+        ["invites", /function inviteExample/],
+        ["audit-logs", /function auditExample/],
+        ["guilds", /function guildSettingsExample/],
+        ["events", /function (?:administrativeEvents|expressionEvents|guildEvents|presenceEvents)Example/],
+        ["discovery", /function discoveryExample/],
+        ["permissions", /function permissionsExample/],
+        ["member-search", /function memberSearchExample/],
+        ["helpers", /function helpersExample/],
+        ["assets", /function assetsExample/],
+        ["attachments", /./],
+        ["messages", /function (?:messageMetadata|sticker)Example/],
+    ])
+        writeNamedExampleFixtures(consumer, readFileSync(join(sdk, "src", `${file}.ts`), "utf8"), [
+            {
+                name: `shared-${file}`,
+                matches: (example) => pattern.test(example),
+                rewrite: rewriteSharedExample,
+            },
+        ])
+    const additionalExamples = writeAdditionalDocumentationExamples(consumer, kind)
+    const authoredGuideFixtures = writeAuthoredGuideExamples(consumer, kind)
+    const repositoryExampleFixtures = writeRepositoryExamples(consumer, kind)
+
+    writeFileSync(
+        join(consumer, "tsconfig.json"),
+        JSON.stringify({
+            compilerOptions: {
+                target: "ES2024",
+                module: "NodeNext",
+                // Handler signals are AbortSignal and handles are AsyncDisposable, which Node.js types declare for the default API
+                types: kind === "default" ? ["node"] : [],
+                strict: true,
+                exactOptionalPropertyTypes: true,
+                noUncheckedIndexedAccess: true,
+                noEmitOnError: true,
+                outDir: "out",
+                lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
+            },
+            include: ["*.ts"],
+            exclude: [
+                "bot.ts",
+                "logging-example.ts",
+                "run-bot-example.ts",
+                "bot-effect.ts",
+                "readme-example-*.ts",
+                ...additionalExamples,
+            ],
+        }),
+    )
+    copyFileSync(join(fixtureDirectory, "agent-guide.js"), join(consumer, "agent-guide.js"))
+    copyFileSync(join(fixtureDirectory, "workflow.js"), join(consumer, "workflow.js"))
+    const invocation =
+        kind === "default"
+            ? "import { createAndReadState } from './out/consumer.js'; if (createAndReadState('fixture-only-not-a-credential') !== 'Disconnected') throw Error('Unexpected state')"
+            : "import { Effect } from 'effect'; import { createWithinCallerScope } from './out/consumer.js'; const client = await Effect.runPromise(Effect.scoped(createWithinCallerScope('fixture-only-not-a-credential'))); if (client.state !== 'Closed') throw Error('Scope did not close client')"
+    const testingInvocation =
+        kind === "default"
+            ? "import { pingTest } from './out/testing-consumer.js'; const requests = await pingTest(); if (requests.length !== 1) throw Error('The respond handler did not run once')"
+            : "import { Effect } from 'effect'; import { pingTest } from './out/testing-consumer.js'; const requests = await Effect.runPromise(pingTest); if (requests.length !== 1) throw Error('The respond handler did not run once')"
+    tasks.push(
+        runCompiler(["-p", "tsconfig.json"], consumer).then(() =>
+            Promise.all([
+                runLight(process.execPath, ["agent-guide.js"], consumer, 15_000).then((out) =>
+                    process.stdout.write(withoutSdkOutput(out)),
+                ),
+                runLight(process.execPath, ["--enable-source-maps", "workflow.js", kind], consumer, 15_000).then(
+                    (out) => process.stdout.write(withoutSdkOutput(out)),
+                ),
+                runLight(process.execPath, ["--input-type=module", "--eval", invocation], consumer, 10_000),
+                runLight(process.execPath, ["--input-type=module", "--eval", testingInvocation], consumer, 15_000),
+            ]),
+        ),
+    )
+
+    // The other consumer programs have the Node.js types and no DOM library, as a Node.js-only project does. Effect
+    // 4.1.0 failed that check, which is why the peer range starts at 4.1.2
+    writeFileSync(
+        join(consumer, "run-bot-tsconfig.json"),
+        JSON.stringify({
+            compilerOptions: {
+                target: "ES2024",
+                module: "NodeNext",
+                types: ["node"],
+                strict: true,
+                exactOptionalPropertyTypes: true,
+                noUncheckedIndexedAccess: true,
+                noEmit: true,
+                allowJs: true,
+                checkJs: true,
+                allowImportingTsExtensions: true,
+                erasableSyntaxOnly: true,
+                lib: ["ES2024"],
+            },
+            include:
+                kind === "default"
+                    ? ["run-bot-example.ts", "logging-example.ts", "bot.ts", "readme-example-*.ts"]
+                    : ["run-bot-example.ts", "logging-example.ts", "bot-effect.ts"],
+        }),
+    )
+    tasks.push(runCompiler(["-p", "run-bot-tsconfig.json"], consumer))
+
+    if (additionalExamples.length > 0) {
+        writeFileSync(
+            join(consumer, "documentation-tsconfig.json"),
+            JSON.stringify({
+                compilerOptions: {
+                    target: "ES2024",
+                    module: "NodeNext",
+                    types: ["node"],
+                    strict: true,
+                    exactOptionalPropertyTypes: true,
+                    noUncheckedIndexedAccess: true,
+                    noEmit: true,
+                    allowImportingTsExtensions: true,
+                    lib: ["ES2024"],
+                },
+                files: additionalExamples,
+            }),
+        )
+        tasks.push(
+            runCompiler(["-p", "documentation-tsconfig.json"], consumer).then(() => {
+                console.log(`${kind} additional authored documentation examples passed: ${additionalExamples.length}`)
+            }),
+        )
+    } else {
+        console.log(`${kind} additional authored documentation examples passed: ${additionalExamples.length}`)
+    }
+
+    const guideTasks = []
+    if (authoredGuideFixtures.typescript.length > 0) {
+        writeFileSync(
+            join(consumer, "authored-guide-typescript-tsconfig.json"),
+            JSON.stringify({
+                compilerOptions: {
+                    target: "ES2024",
+                    module: "NodeNext",
+                    types: ["node"],
+                    strict: true,
+                    exactOptionalPropertyTypes: true,
+                    noUncheckedIndexedAccess: true,
+                    noEmit: true,
+                    allowJs: true,
+                    checkJs: true,
+                    allowImportingTsExtensions: true,
+                    lib: ["ES2024"],
+                },
+                files: authoredGuideFixtures.typescript,
+            }),
+        )
+        guideTasks.push(runCompiler(["-p", "authored-guide-typescript-tsconfig.json"], consumer))
+    }
+    if (authoredGuideFixtures.javascript.length > 0) {
+        writeFileSync(
+            join(consumer, "authored-guide-javascript-tsconfig.json"),
+            JSON.stringify({
+                compilerOptions: {
+                    target: "ES2024",
+                    module: "NodeNext",
+                    types: ["node"],
+                    strict: true,
+                    exactOptionalPropertyTypes: true,
+                    noUncheckedIndexedAccess: true,
+                    allowJs: true,
+                    checkJs: false,
+                    noEmit: true,
+                    allowImportingTsExtensions: true,
+                    lib: ["ES2024"],
+                },
+                files: authoredGuideFixtures.javascript,
+            }),
+        )
+        guideTasks.push(runCompiler(["-p", "authored-guide-javascript-tsconfig.json"], consumer))
+    }
+    tasks.push(
+        Promise.all(guideTasks).then(() => {
+            console.log(
+                `${kind} authored website guide examples passed: ${authoredGuideFixtures.javascript.length} JavaScript and ${authoredGuideFixtures.typescript.length} TypeScript`,
+            )
+        }),
+    )
+
+    const exampleCompilerOptions = {
+        target: "ES2024",
+        module: "NodeNext",
+        types: ["node"],
+        strict: true,
+        exactOptionalPropertyTypes: true,
+        noUncheckedIndexedAccess: true,
+        noEmit: true,
+        allowJs: true,
+        checkJs: true,
+        allowImportingTsExtensions: true,
+        lib: ["ES2024"],
+    }
+    const repoCompileTasks = []
+    for (const { language, files: groupFiles, compilerOptions } of [
+        {
+            language: "typescript",
+            files: repositoryExampleFixtures.typescript,
+            compilerOptions: exampleCompilerOptions,
+        },
+        // Parameter annotations exist only in the TypeScript source, whose strict check covers them
+        {
+            language: "javascript",
+            files: repositoryExampleFixtures.javascript,
+            compilerOptions: { ...exampleCompilerOptions, noImplicitAny: false },
+        },
+        // A test's helpers take option objects whose shapes only the TypeScript test declares, so its JavaScript
+        // variant is checked for syntax and imports, while the TypeScript test is strict
+        {
+            language: "javascript-test",
+            files: repositoryExampleFixtures.javascriptTests,
+            compilerOptions: { ...exampleCompilerOptions, checkJs: false },
+        },
+    ]) {
+        if (groupFiles.length === 0) continue
+        const config = `repository-example-${language}-tsconfig.json`
+        writeFileSync(join(consumer, config), JSON.stringify({ compilerOptions, files: groupFiles }))
+        repoCompileTasks.push(runCompiler(["-p", config], consumer))
+    }
+    tasks.push(
+        Promise.all(repoCompileTasks).then(() => {
+            console.log(
+                `${kind} repository examples compiled: ${repositoryExampleFixtures.javascript.length + repositoryExampleFixtures.javascriptTests.length} JavaScript and ${repositoryExampleFixtures.typescript.length} TypeScript`,
+            )
+        }),
+    )
+
+    // A project from fluxerly init compiles with its own settings, without exactOptionalPropertyTypes and
+    // noUncheckedIndexedAccess. Some types infer differently without them, so guide and example TypeScript is
+    // compiled a second time with exactly those settings, as a reader's project compiles it
+    const starterSettingsFiles = [...authoredGuideFixtures.typescript, ...repositoryExampleFixtures.typescript]
+    tasks.push(
+        starterOptionsDeferred.promise.then(async (starterCompilerOptions) => {
+            assert.ok(starterCompilerOptions, "The starter project check must run before the starter settings pass")
+            writeFileSync(
+                join(consumer, "starter-settings-tsconfig.json"),
+                JSON.stringify({ compilerOptions: starterCompilerOptions, files: starterSettingsFiles }),
+            )
+            await runCompiler(["-p", "starter-settings-tsconfig.json"], consumer)
+            console.log(
+                `${kind} guide and example TypeScript passed with the starter project's settings: ${starterSettingsFiles.length} files`,
+            )
+        }),
+    )
+
+    // The default API's JavaScript and TypeScript files are the same program, so its JavaScript files run here.
+    // The examples' own tests run in the SDK's test:examples script
+    copyFileSync(join(fixtureDirectory, "repository-examples.js"), join(consumer, "repository-examples.js"))
+    const runnableExamples = repositoryExampleFixtures.programs
+        .filter(({ language }) => language === (kind === "default" ? "js" : "ts"))
+        .map(({ file }) => file)
+    tasks.push(
+        runLight(process.execPath, ["repository-examples.js", kind, ...runnableExamples], consumer, 15_000).then(
+            (out) => process.stdout.write(withoutSdkOutput(out)),
+        ),
+    )
+
+    if (kind === "default") {
+        copyFileSync(join(fixtureDirectory, "javascript-tooling.js"), join(consumer, "javascript-tooling.js"))
+        writeFileSync(
+            join(consumer, "javascript-tooling-tsconfig.json"),
+            JSON.stringify({
+                compilerOptions: {
+                    target: "ES2024",
+                    module: "NodeNext",
+                    types: ["node"],
+                    lib: ["ES2024"],
+                    strict: true,
+                    exactOptionalPropertyTypes: true,
+                    noUncheckedIndexedAccess: true,
+                    allowJs: true,
+                    checkJs: true,
+                    noEmit: true,
+                },
+                files: ["javascript-tooling.js"],
+            }),
+        )
+        tasks.push(
+            runCompiler(["-p", "javascript-tooling-tsconfig.json"], consumer).then(() => {
+                console.log(
+                    "Packed checked-JavaScript inference, Result narrowing and invalid-input diagnostics passed",
+                )
+            }),
+        )
+    }
+
+    await Promise.all(tasks)
+    console.log(`${kind} TypeScript 7 packed consumer passed`)
+}
+
+async function checkIncompatibleEffect(tarball) {
+    const incompatibleEffect = join(temporary, "incompatible-effect")
+    mkdirSync(incompatibleEffect)
+    writeFileSync(join(incompatibleEffect, "package.json"), JSON.stringify({ name: "effect", version: "4.0.0-rc.116" }))
+    const incompatibleConsumer = join(temporary, "incompatible-consumer")
+    mkdirSync(incompatibleConsumer)
+    writeFileSync(
+        join(incompatibleConsumer, "package.json"),
+        JSON.stringify({
+            private: true,
+            type: "module",
+            dependencies: {
+                [manifest.name]: `file:${tarball.replaceAll("\\", "/")}`,
+                effect: `file:${incompatibleEffect.replaceAll("\\", "/")}`,
+            },
+        }),
+    )
+    writeFileSync(join(incompatibleConsumer, "pnpm-workspace.yaml"), "allowBuilds:\n  msgpackr-extract: false\n")
+    await assert.rejects(
+        () =>
+            packageManager(
+                ["install", "--prefer-offline", "--ignore-scripts", "--strict-peer-dependencies"],
+                incompatibleConsumer,
+            ),
+        (error) => /peer/i.test(String(error.stdout) + String(error.stderr)),
+        "An Effect version outside the peer range must fail strict peer installation rather than silently use separate runtimes",
+    )
+    console.log("Native Effect outside the peer range rejected by strict peer installation")
+}
+
 try {
     const staged = await stageRelease({ version: manifest.version, output: join(temporary, "artifacts") })
     const tarball = staged.npm.tarball
@@ -437,702 +1262,12 @@ try {
 
     // Consumer fixtures import ../hosted-discovery.mjs, which resolves only in this packed layout
     copyFileSync(join(sdk, "tests/support/hosted-discovery.mjs"), join(temporary, "hosted-discovery.mjs"))
-    for (const kind of ["default", "effect"]) {
-        const consumer = join(temporary, kind)
-        mkdirSync(consumer)
-        const dependencies = { [manifest.name]: `file:${tarball.replaceAll("\\", "/")}` }
-        // Exercise the supported peer floor rather than silently selecting a newer compatible release
-        if (kind === "effect") dependencies.effect = manifest.peerDependencies.effect.replace(/^\^/, "")
-        writeFileSync(
-            join(consumer, "package.json"),
-            JSON.stringify({
-                private: true,
-                type: "module",
-                dependencies,
-                devDependencies: { "@types/node": manifest.devDependencies["@types/node"] },
-            }),
-        )
-        writeFileSync(join(consumer, "pnpm-workspace.yaml"), "allowBuilds:\n  msgpackr-extract: false\n")
-        packageManager(["install", "--prefer-offline", "--ignore-scripts", "--strict-peer-dependencies"], consumer)
 
-        const installed = join(consumer, "node_modules", manifest.name)
-        for (const path of files) {
-            assert.deepEqual(
-                readFileSync(join(installed, path)),
-                readFileSync(join(staged.npm.directory, path)),
-                `Packed bytes differ from staged ${path}`,
-            )
-        }
-        for (const path of ["README.md", "agents/AGENTS.md", "agents/TRIAGE.md"]) {
-            assert.equal(readFileSync(join(installed, path), "utf8"), readFileSync(join(sdk, path), "utf8"))
-        }
-        assert.deepEqual(readFileSync(join(installed, "LICENSE")), readFileSync(join(sdk, "../../LICENSE")))
-        // The SDK is ESM-only, so require() must reach the explanatory module rather than fail to resolve
-        for (const specifier of [
-            manifest.name,
-            `${manifest.name}/effect`,
-            `${manifest.name}/testing`,
-            `${manifest.name}/effect/testing`,
-        ])
-            assert.throws(
-                () => createRequire(join(consumer, "package.json"))(specifier),
-                (error) => error.constructor === Error && error.code === undefined && /ESM-only/.test(error.message),
-            )
-        if (kind === "default") {
-            // The installed command writes the rules into the application's AGENTS.md, as the guides instruct
-            packageManager(["exec", "fluxerly", "agents"], consumer)
-            const agents = readFileSync(join(consumer, "AGENTS.md"), "utf8")
-            assert.ok(
-                agents.includes(`@neontechspace/fluxerly ${manifest.version}`),
-                "AGENTS.md names the installed version",
-            )
-            assert.ok(
-                agents.includes("run `pnpm exec fluxerly agents` to refresh"),
-                "AGENTS.md names the project's command",
-            )
-            assert.ok(agents.includes("1. Import only from"), "AGENTS.md contains the rules")
-
-            // The installed command writes each starter project into an empty folder, whose own test passes after
-            // installing the dependencies its next steps name
-            const cli = join(installed, "dist/cli.js")
-            const invalid = join(temporary, "init-invalid")
-            mkdirSync(invalid)
-            assert.throws(
-                () => run(process.execPath, [cli, "init", "--template", "rust"], invalid),
-                (error) => error.status === 1 && error.stderr.includes("--template js|ts|effect"),
-                "An unknown template prints the usage and fails",
-            )
-            assert.deepEqual(readdirSync(invalid), [], "An unknown template writes nothing")
-
-            // An install whose package manager cannot start keeps the starter and prints the install commands. An
-            // empty PATH removes every manager without needing the network
-            const noManager = join(temporary, "init-no-manager")
-            const emptyPath = join(temporary, "empty-path")
-            mkdirSync(noManager)
-            mkdirSync(emptyPath)
-            const withoutManagers = Object.fromEntries(
-                Object.entries(process.env).filter(([name]) => !/^path$/i.test(name)),
-            )
-            assert.throws(
-                () =>
-                    run(process.execPath, [cli, "init"], noManager, 120_000, {
-                        ...withoutManagers,
-                        PATH: emptyPath,
-                        npm_config_user_agent: "pnpm/10.0.0 npm/? node/v24.0.0",
-                    }),
-                (error) =>
-                    error.status === 1 &&
-                    /Installing with pnpm failed/.test(error.stderr) &&
-                    error.stdout.includes(`pnpm add`) &&
-                    error.stdout.includes(`${manifest.name}@${manifest.version}`),
-                "fluxerly init reports an install whose package manager cannot start",
-            )
-            assert.ok(
-                ["package.json", "bot.js", ".env"].every((name) => readdirSync(noManager).includes(name)),
-                "A failed install keeps the written starter",
-            )
-
-            // The printed install pins the packed version, exactly while it is a prerelease
-            const effectVersion = manifest.peerDependencies.effect.replace(/^\^/, "")
-            // Each starter runs under another package manager, whose commands its next steps name
-            const initManagers = {
-                js: {
-                    userAgent: "npm/11.0.0 node/v24.0.0",
-                    add: "npm install",
-                    exact: "--save-exact",
-                    dev: "--save-dev",
-                },
-                ts: {
-                    userAgent: "pnpm/10.0.0 npm/? node/v24.0.0",
-                    add: "pnpm add",
-                    exact: "--save-exact",
-                    dev: "--save-dev",
-                },
-                effect: { userAgent: "bun/1.3.0 npm/? node/v24.0.0", add: "bun add", exact: "--exact", dev: "--dev" },
-            }
-            for (const template of ["js", "ts", "effect"]) {
-                const starter = join(temporary, `init-${template}`)
-                mkdirSync(starter)
-                const initManager = initManagers[template]
-                const initEnvironment = { ...process.env, npm_config_user_agent: initManager.userAgent }
-                const exactFlag = manifest.version.includes("-") ? ` ${initManager.exact}` : ""
-                // Without a terminal, init writes the JavaScript starter unless --template names another one. The
-                // check installs the packed tarball itself, so init installs nothing
-                const initArguments = ["init", "--no-install", ...(template === "js" ? [] : ["--template", template])]
-                const initOutput = run(process.execPath, [cli, ...initArguments], starter, 120_000, initEnvironment)
-                assert.ok(
-                    readdirSync(starter).includes(template === "js" ? "bot.js" : "bot.ts"),
-                    `fluxerly ${initArguments.join(" ")} writes the ${template} starter`,
-                )
-                assert.equal(
-                    readFileSync(join(starter, ".env"), "utf8"),
-                    readFileSync(join(starter, ".env.example"), "utf8"),
-                    "fluxerly init copies .env.example to .env",
-                )
-                assert.ok(
-                    initOutput.includes(`${initManager.add}${exactFlag} ${manifest.name}@${manifest.version}`),
-                    "fluxerly init prints the install of the installed version with the detected package manager",
-                )
-                assert.equal(
-                    initOutput.includes(`${initManager.add} effect@${effectVersion}`),
-                    template === "effect",
-                    "Only the Effect starter's next steps install Effect",
-                )
-                assert.equal(
-                    initOutput.includes(`${initManager.add} ${initManager.dev} @types/node`),
-                    template !== "js",
-                    "Only the TypeScript starters' next steps install the Node.js types",
-                )
-                assert.equal(
-                    initOutput.includes("typescript@7"),
-                    template !== "js",
-                    "Only the TypeScript starters' next steps install TypeScript",
-                )
-                assert.throws(
-                    () => run(process.execPath, [cli, ...initArguments], starter, 120_000, initEnvironment),
-                    (error) => error.status === 1 && /already exist.*wrote nothing/.test(error.stderr),
-                    "A second fluxerly init refuses the existing files",
-                )
-                writeFileSync(join(starter, "pnpm-workspace.yaml"), "allowBuilds:\n  msgpackr-extract: false\n")
-                const dependencies = [`file:${tarball.replaceAll("\\", "/")}`]
-                if (template === "effect") dependencies.push(`effect@${effectVersion}`)
-                packageManager(["add", ...dependencies, "--prefer-offline", "--ignore-scripts"], starter)
-                if (template !== "js") {
-                    // The pinned SDK types and compiler keep this check reproducible where the printed step takes
-                    // the latest
-                    packageManager(
-                        [
-                            "add",
-                            "--save-dev",
-                            `@types/node@${manifest.devDependencies["@types/node"]}`,
-                            `typescript@${manifest.devDependencies.typescript}`,
-                            "--prefer-offline",
-                            "--ignore-scripts",
-                        ],
-                        starter,
-                    )
-                    // The generated check script runs the compiler on the generated tsconfig.json and passes without
-                    // changes
-                    packageManager(["run", "check"], starter)
-                    starterCompilerOptions ??= JSON.parse(
-                        readFileSync(join(starter, "tsconfig.json"), "utf8"),
-                    ).compilerOptions
-                }
-                // node --test passes when it finds no test file, so the report must show the generated test passing
-                assert.match(stripVTControlCharacters(packageManager(["test"], starter)), /^(?:#|ℹ) pass 1$/m)
-
-                // A first test must explain a broken command and must end on a stuck one. Each case swaps the starter's
-                // command body, and the stuck case also shortens the generated timeout
-                const botFile = join(starter, template === "js" ? "bot.js" : "bot.ts")
-                const healthyBot = readFileSync(botFile, "utf8")
-                const withCommand = (body) => {
-                    const changed = healthyBot.replace('({ reply }) => reply("Pong!")', body)
-                    assert.notEqual(changed, healthyBot, `The ${template} starter's command body moved`)
-                    writeFileSync(botFile, changed)
-                }
-                const thrownText = "starter-check-thrown-text"
-                withCommand(
-                    template === "effect"
-                        ? `() => Effect.die(new Error("${thrownText}"))`
-                        : `() => { throw new Error("${thrownText}") }`,
-                )
-                assert.throws(
-                    () => packageManager(["test"], starter),
-                    (error) => error.status === 1 && `${error.stdout}${error.stderr}`.includes(thrownText),
-                    `The ${template} starter's test must fail with the text its command threw`,
-                )
-                const generatedManifest = JSON.parse(readFileSync(join(starter, "package.json"), "utf8"))
-                const shortened = generatedManifest.scripts.test.replace("--test-timeout=30000", "--test-timeout=2000")
-                assert.notEqual(shortened, generatedManifest.scripts.test, "The generated test script sets a timeout")
-                writeFileSync(
-                    join(starter, "package.json"),
-                    JSON.stringify({
-                        ...generatedManifest,
-                        scripts: { ...generatedManifest.scripts, test: shortened },
-                    }),
-                )
-                withCommand(template === "effect" ? "() => Effect.never" : "() => new Promise(() => {})")
-                // The hang guard is well past the shortened timeout, and a hang ends with no exit status
-                assert.throws(
-                    () => packageManager(["test"], starter, 60_000),
-                    (error) => error.status === 1,
-                    `The ${template} starter's test script must end a test whose command never settles`,
-                )
-                console.log(`fluxerly init ${template} starter project passed its generated test`)
-            }
-        }
-        const installedManifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"))
-        assert.ok(!installedManifest.private && !installedManifest.scripts && !installedManifest.devDependencies)
-        for (const field of ["peerDependencies", "peerDependenciesMeta", "imports", "engines"])
-            assert.deepEqual(
-                installedManifest[field],
-                manifest[field],
-                `Packed ${field} differs from the source manifest`,
-            )
-        if (kind === "effect") {
-            const appRequire = createRequire(join(consumer, "package.json"))
-            const sdkRequire = createRequire(join(installed, "package.json"))
-            assert.equal(
-                appRequire.resolve("effect"),
-                sdkRequire.resolve("effect"),
-                "Native consumer must share Effect",
-            )
-        }
-        const guideExample = [
-            ...readFileSync(join(installed, "agents/AGENTS.md"), "utf8").matchAll(/```ts\r?\n([\s\S]*?)```/g),
-        ]
-            .map((match) => match[1])
-            .filter((example) => example.includes('from "effect"') === (kind === "effect"))
-        assert.equal(guideExample.length, 1, `Expected one ${kind} example in the shipped agent guide`)
-        // Every declaration file the guide's task map names exists in the installed package
-        const guidePaths = [
-            ...readFileSync(join(installed, "agents/AGENTS.md"), "utf8").matchAll(/`(dist\/[\w/.-]+\.d\.ts)`/g),
-        ].map((match) => match[1])
-        assert.ok(guidePaths.length > 10, "Expected the shipped agent guide to map tasks to declaration files")
-        for (const path of guidePaths)
-            assert.ok(existsSync(join(installed, path)), `The agent guide names missing ${path}`)
-        writeFileSync(join(consumer, "agent-guide.ts"), guideExample[0])
-        run(
-            process.execPath,
-            [
-                "--input-type=module",
-                "--eval",
-                "import assert from 'node:assert/strict'; import { pathToFileURL } from 'node:url'; import { realpathSync } from 'node:fs'; assert.equal(import.meta.resolve('#sdk/internal/client'), pathToFileURL(realpathSync('dist/internal/client.js')).href)",
-            ],
-            installed,
-            10_000,
-        )
-        // Each packed entry point starts with its source overview comment
-        const normalizeComment = (text) => text.replace(/\s+/g, " ").trim()
-        for (const entry of ["index", "effect"]) {
-            const overview = readFileSync(join(sdk, "src", `${entry}.ts`), "utf8").match(/^\/\*\*[\s\S]*?\*\//)?.[0]
-            assert.ok(overview?.includes("@packageDocumentation"), `Missing ${entry} entry-point overview`)
-            assert.ok(
-                normalizeComment(readFileSync(join(installed, `dist/${entry}.d.ts`), "utf8")).startsWith(
-                    normalizeComment(overview),
-                ),
-                `Entry-point overview missing from packed dist/${entry}.d.ts`,
-            )
-        }
-        assertDefaultDeclarationsAvoidEffect(installed)
-        for (const file of files.filter((file) => file.endsWith(".map"))) {
-            const sourceMap = JSON.parse(readFileSync(join(installed, file), "utf8"))
-            assert.ok(sourceMap.sources.length > 0)
-            // Maps point at the shipped src/ files instead of embedding a second copy of every source
-            assert.equal(sourceMap.sourcesContent, undefined, `${file} embeds sources that src/ already ships`)
-            for (const source of sourceMap.sources) {
-                const resolved = resolve(installed, dirname(file), sourceMap.sourceRoot ?? "", source)
-                const packedPath = relative(installed, resolved)
-                assert.ok(!isAbsolute(packedPath) && packedPath !== ".." && !packedPath.startsWith(`..${sep}`))
-                assert.ok(existsSync(resolved))
-            }
-        }
-
-        for (const file of ["loopback.js", "starter.js"])
-            copyFileSync(join(fixtureDirectory, file), join(consumer, file))
-        if (kind === "default") {
-            assert.equal(existsSync(join(consumer, "node_modules/effect")), false)
-            const websiteGuide = websiteGuides.find((guide) => guide.slug === "quick-start").content
-            const websiteExamples = [...websiteGuide.matchAll(/```js\r?\n([\s\S]*?)```/g)]
-            assert.equal(
-                websiteExamples.length,
-                1,
-                "Expected one website bot block shared by JavaScript and TypeScript",
-            )
-            for (const file of ["bot.js", "bot.ts"]) {
-                assert.equal(
-                    await normalizeJavaScriptExample(readFileSync(join(installed, "examples/starter", file), "utf8")),
-                    await normalizeJavaScriptExample(websiteExamples[0][1]),
-                    `The installed ${file} must match the rendered runnable starter`,
-                )
-            }
-            // The README bot is compiled with the starters rather than compared as text
-            const readmeExamples = [
-                ...readFileSync(join(installed, "README.md"), "utf8").matchAll(/```js\r?\n([\s\S]*?)```/g),
-            ]
-            assert.ok(readmeExamples.length > 0, "Expected a bot example in the packed README")
-            for (const [index, [, source]] of readmeExamples.entries())
-                writeFileSync(join(consumer, `readme-example-${index}.ts`), `${source}\nexport {}\n`)
-            for (const filename of ["bot.js", "bot.ts"]) {
-                writeFileSync(join(consumer, filename), websiteExamples[0][1])
-                process.stdout.write(
-                    withoutSdkOutput(run(process.execPath, ["starter.js", kind, filename], consumer, 15_000)),
-                )
-            }
-        }
-        if (kind === "effect") {
-            const starter = completeEffectStarter()
-            assert.equal(
-                starter.source.trim(),
-                readFileSync(join(installed, "examples/starter/bot-effect.ts"), "utf8").trim(),
-                "The rendered native starter must use the installed application source",
-            )
-            writeFileSync(join(consumer, "bot-effect.ts"), starter.source)
-            process.stdout.write(
-                withoutSdkOutput(run(process.execPath, ["starter.js", kind, "bot-effect.ts"], consumer, 15_000)),
-            )
-        }
-        copyFileSync(join(fixtureDirectory, `${kind}.js`), join(consumer, "consumer.js"))
-        process.stdout.write(
-            withoutSdkOutput(run(process.execPath, ["--enable-source-maps", "consumer.js"], consumer, 10_000)),
-        )
-        copyFileSync(join(fixtureDirectory, "sharding-workflow.js"), join(consumer, "sharding-workflow.js"))
-        process.stdout.write(
-            withoutSdkOutput(
-                run(process.execPath, ["--enable-source-maps", "sharding-workflow.js", kind], consumer, 15_000),
-            ),
-        )
-        copyFileSync(join(fixtureDirectory, "testing.js"), join(consumer, "testing.js"))
-        process.stdout.write(withoutSdkOutput(run(process.execPath, ["testing.js", kind], consumer, 15_000)))
-        copyFileSync(join(fixtureDirectory, "module-conformance.js"), join(consumer, "module-conformance.js"))
-        copyFileSync(
-            join(sdk, "tests/contract/module-conformance-registry.js"),
-            join(consumer, "module-conformance-registry.js"),
-        )
-        process.stdout.write(withoutSdkOutput(run(process.execPath, ["module-conformance.js", kind], consumer, 10_000)))
-
-        copyFileSync(join(fixtureDirectory, `${kind}.ts`), join(consumer, "consumer.ts"))
-        copyFileSync(join(fixtureDirectory, `testing-${kind}.ts`), join(consumer, "testing-consumer.ts"))
-        // Type-only consumers of exports that the entry point consumers above do not name
-        if (kind === "default") copyFileSync(join(fixtureDirectory, "logging.ts"), join(consumer, "logging.ts"))
-        if (kind === "effect") {
-            copyFileSync(join(fixtureDirectory, "message-fields.ts"), join(consumer, "message-fields.ts"))
-            copyFileSync(join(fixtureDirectory, "event-accounting.ts"), join(consumer, "event-accounting.ts"))
-        }
-        for (const file of ["builders-state.ts", "guild-feature-types.ts"])
-            writeFileSync(
-                join(consumer, file),
-                readFileSync(join(fixtureDirectory, file), "utf8").replaceAll(
-                    '"@neontechspace/fluxerly"',
-                    JSON.stringify(kind === "default" ? manifest.name : `${manifest.name}/effect`),
-                ),
-            )
-        // Each entry point re-exports its hand-written API modules, which hold the authored examples
-        const apiDirectory = join(sdk, "src/api", kind === "default" ? "default" : "effect")
-        const publicSource = [
-            join(sdk, "src", kind === "default" ? "index.ts" : "effect.ts"),
-            ...readdirSync(apiDirectory)
-                .filter((file) => file.endsWith(".ts"))
-                .sort()
-                .map((file) => join(apiDirectory, file)),
-        ]
-            .map((file) => readFileSync(file, "utf8"))
-            .join("\n")
-        // Examples that workflow.js imports from out/, and runnable programs checked with the starters
-        writeNamedExampleFixtures(consumer, publicSource, [
-            {
-                name: "optional-tools",
-                matches: (example) => /(?:function|const) installPing/.test(example),
-                file: () => "optional-tools-example.ts",
-            },
-            {
-                name: "commandGroupExample",
-                matches: (example) => example.includes("function commandGroupExample("),
-                file: () => "commandGroupExample.ts",
-            },
-            {
-                name: "runBot",
-                matches: (example) => /function pingBot\(/.test(example),
-                file: () => "run-bot-example.ts",
-            },
-        ])
-        writeNamedExampleFixtures(
-            consumer,
-            kind === "default" ? readFileSync(join(sdk, "src/client.ts"), "utf8") : publicSource,
-            [
-                {
-                    name: "logging",
-                    matches: (example) => /function loggingExample/.test(example),
-                    file: () => "logging-example.ts",
-                },
-            ],
-        )
-        // Shared module examples import the default entry point and must also compile against the native one
-        const rewriteSharedExample = (example) =>
-            kind === "default"
-                ? example
-                : example.replaceAll('"@neontechspace/fluxerly"', '"@neontechspace/fluxerly/effect"')
-        for (const [file, pattern] of [
-            ["api-errors", /function formatApiErrorDetail/],
-            ["input-validation", /function readInputValidation/],
-            ["client", /function selectedMessagesExample/],
-            ["expressions", /function expressionExample/],
-            ["invites", /function inviteExample/],
-            ["audit-logs", /function auditExample/],
-            ["guilds", /function guildSettingsExample/],
-            ["events", /function (?:administrativeEvents|expressionEvents|guildEvents|presenceEvents)Example/],
-            ["discovery", /function discoveryExample/],
-            ["permissions", /function permissionsExample/],
-            ["member-search", /function memberSearchExample/],
-            ["helpers", /function helpersExample/],
-            ["assets", /function assetsExample/],
-            ["attachments", /./],
-            ["messages", /function (?:messageMetadata|sticker)Example/],
-        ])
-            writeNamedExampleFixtures(consumer, readFileSync(join(sdk, "src", `${file}.ts`), "utf8"), [
-                {
-                    name: `shared-${file}`,
-                    matches: (example) => pattern.test(example),
-                    rewrite: rewriteSharedExample,
-                },
-            ])
-        const additionalExamples = writeAdditionalDocumentationExamples(consumer, kind)
-        const authoredGuideFixtures = writeAuthoredGuideExamples(consumer, kind)
-        const repositoryExampleFixtures = writeRepositoryExamples(consumer, kind)
-        writeFileSync(
-            join(consumer, "tsconfig.json"),
-            JSON.stringify({
-                compilerOptions: {
-                    target: "ES2024",
-                    module: "NodeNext",
-                    // Handler signals are AbortSignal and handles are AsyncDisposable, which Node.js types declare for the default API
-                    types: kind === "default" ? ["node"] : [],
-                    strict: true,
-                    exactOptionalPropertyTypes: true,
-                    noUncheckedIndexedAccess: true,
-                    noEmitOnError: true,
-                    outDir: "out",
-                    lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
-                },
-                include: ["*.ts"],
-                exclude: [
-                    "bot.ts",
-                    "logging-example.ts",
-                    "run-bot-example.ts",
-                    "bot-effect.ts",
-                    "readme-example-*.ts",
-                    ...additionalExamples,
-                ],
-            }),
-        )
-        run(process.execPath, [compiler, "-p", "tsconfig.json"], consumer)
-        copyFileSync(join(fixtureDirectory, "agent-guide.js"), join(consumer, "agent-guide.js"))
-        process.stdout.write(withoutSdkOutput(run(process.execPath, ["agent-guide.js"], consumer, 15_000)))
-        copyFileSync(join(fixtureDirectory, "workflow.js"), join(consumer, "workflow.js"))
-        process.stdout.write(
-            withoutSdkOutput(run(process.execPath, ["--enable-source-maps", "workflow.js", kind], consumer, 15_000)),
-        )
-        // The other consumer programs have the Node.js types and no DOM library, as a Node.js-only project does. Effect
-        // 4.1.0 failed that check, which is why the peer range starts at 4.1.2
-        writeFileSync(
-            join(consumer, "run-bot-tsconfig.json"),
-            JSON.stringify({
-                compilerOptions: {
-                    target: "ES2024",
-                    module: "NodeNext",
-                    types: ["node"],
-                    strict: true,
-                    exactOptionalPropertyTypes: true,
-                    noUncheckedIndexedAccess: true,
-                    noEmit: true,
-                    allowJs: true,
-                    checkJs: true,
-                    allowImportingTsExtensions: true,
-                    erasableSyntaxOnly: true,
-                    lib: ["ES2024"],
-                },
-                include:
-                    kind === "default"
-                        ? ["run-bot-example.ts", "logging-example.ts", "bot.ts", "readme-example-*.ts"]
-                        : ["run-bot-example.ts", "logging-example.ts", "bot-effect.ts"],
-            }),
-        )
-        run(process.execPath, [compiler, "-p", "run-bot-tsconfig.json"], consumer)
-        if (additionalExamples.length > 0) {
-            writeFileSync(
-                join(consumer, "documentation-tsconfig.json"),
-                JSON.stringify({
-                    compilerOptions: {
-                        target: "ES2024",
-                        module: "NodeNext",
-                        types: ["node"],
-                        strict: true,
-                        exactOptionalPropertyTypes: true,
-                        noUncheckedIndexedAccess: true,
-                        noEmit: true,
-                        allowImportingTsExtensions: true,
-                        lib: ["ES2024"],
-                    },
-                    files: additionalExamples,
-                }),
-            )
-            run(process.execPath, [compiler, "-p", "documentation-tsconfig.json"], consumer)
-        }
-        console.log(`${kind} additional authored documentation examples passed: ${additionalExamples.length}`)
-        if (authoredGuideFixtures.typescript.length > 0) {
-            writeFileSync(
-                join(consumer, "authored-guide-typescript-tsconfig.json"),
-                JSON.stringify({
-                    compilerOptions: {
-                        target: "ES2024",
-                        module: "NodeNext",
-                        types: ["node"],
-                        strict: true,
-                        exactOptionalPropertyTypes: true,
-                        noUncheckedIndexedAccess: true,
-                        noEmit: true,
-                        allowJs: true,
-                        checkJs: true,
-                        allowImportingTsExtensions: true,
-                        lib: ["ES2024"],
-                    },
-                    files: authoredGuideFixtures.typescript,
-                }),
-            )
-            run(process.execPath, [compiler, "-p", "authored-guide-typescript-tsconfig.json"], consumer)
-        }
-        if (authoredGuideFixtures.javascript.length > 0) {
-            writeFileSync(
-                join(consumer, "authored-guide-javascript-tsconfig.json"),
-                JSON.stringify({
-                    compilerOptions: {
-                        target: "ES2024",
-                        module: "NodeNext",
-                        types: ["node"],
-                        strict: true,
-                        exactOptionalPropertyTypes: true,
-                        noUncheckedIndexedAccess: true,
-                        allowJs: true,
-                        checkJs: false,
-                        noEmit: true,
-                        allowImportingTsExtensions: true,
-                        lib: ["ES2024"],
-                    },
-                    files: authoredGuideFixtures.javascript,
-                }),
-            )
-            run(process.execPath, [compiler, "-p", "authored-guide-javascript-tsconfig.json"], consumer)
-        }
-        console.log(
-            `${kind} authored website guide examples passed: ${authoredGuideFixtures.javascript.length} JavaScript and ${authoredGuideFixtures.typescript.length} TypeScript`,
-        )
-        const exampleCompilerOptions = {
-            target: "ES2024",
-            module: "NodeNext",
-            types: ["node"],
-            strict: true,
-            exactOptionalPropertyTypes: true,
-            noUncheckedIndexedAccess: true,
-            noEmit: true,
-            allowJs: true,
-            checkJs: true,
-            allowImportingTsExtensions: true,
-            lib: ["ES2024"],
-        }
-        for (const { language, files, compilerOptions } of [
-            {
-                language: "typescript",
-                files: repositoryExampleFixtures.typescript,
-                compilerOptions: exampleCompilerOptions,
-            },
-            // Parameter annotations exist only in the TypeScript source, whose strict check covers them
-            {
-                language: "javascript",
-                files: repositoryExampleFixtures.javascript,
-                compilerOptions: { ...exampleCompilerOptions, noImplicitAny: false },
-            },
-            // A test's helpers take option objects whose shapes only the TypeScript test declares, so its JavaScript
-            // variant is checked for syntax and imports, while the TypeScript test is strict
-            {
-                language: "javascript-test",
-                files: repositoryExampleFixtures.javascriptTests,
-                compilerOptions: { ...exampleCompilerOptions, checkJs: false },
-            },
-        ]) {
-            if (files.length === 0) continue
-            const config = `repository-example-${language}-tsconfig.json`
-            writeFileSync(join(consumer, config), JSON.stringify({ compilerOptions, files }))
-            run(process.execPath, [compiler, "-p", config], consumer)
-        }
-        console.log(
-            `${kind} repository examples compiled: ${repositoryExampleFixtures.javascript.length + repositoryExampleFixtures.javascriptTests.length} JavaScript and ${repositoryExampleFixtures.typescript.length} TypeScript`,
-        )
-        // A project from fluxerly init compiles with its own settings, without exactOptionalPropertyTypes and
-        // noUncheckedIndexedAccess. Some types infer differently without them, so guide and example TypeScript is
-        // compiled a second time with exactly those settings, as a reader's project compiles it
-        assert.ok(starterCompilerOptions, "The starter project check must run before the starter settings pass")
-        const starterSettingsFiles = [...authoredGuideFixtures.typescript, ...repositoryExampleFixtures.typescript]
-        writeFileSync(
-            join(consumer, "starter-settings-tsconfig.json"),
-            JSON.stringify({ compilerOptions: starterCompilerOptions, files: starterSettingsFiles }),
-        )
-        run(process.execPath, [compiler, "-p", "starter-settings-tsconfig.json"], consumer)
-        console.log(
-            `${kind} guide and example TypeScript passed with the starter project's settings: ${starterSettingsFiles.length} files`,
-        )
-        // The default API's JavaScript and TypeScript files are the same program, so its JavaScript files run here.
-        // The examples' own tests run in the SDK's test:examples script
-        copyFileSync(join(fixtureDirectory, "repository-examples.js"), join(consumer, "repository-examples.js"))
-        const runnableExamples = repositoryExampleFixtures.programs
-            .filter(({ language }) => language === (kind === "default" ? "js" : "ts"))
-            .map(({ file }) => file)
-        process.stdout.write(
-            withoutSdkOutput(
-                run(process.execPath, ["repository-examples.js", kind, ...runnableExamples], consumer, 15_000),
-            ),
-        )
-        if (kind === "default") {
-            copyFileSync(join(fixtureDirectory, "javascript-tooling.js"), join(consumer, "javascript-tooling.js"))
-            writeFileSync(
-                join(consumer, "javascript-tooling-tsconfig.json"),
-                JSON.stringify({
-                    compilerOptions: {
-                        target: "ES2024",
-                        module: "NodeNext",
-                        types: ["node"],
-                        lib: ["ES2024"],
-                        strict: true,
-                        exactOptionalPropertyTypes: true,
-                        noUncheckedIndexedAccess: true,
-                        allowJs: true,
-                        checkJs: true,
-                        noEmit: true,
-                    },
-                    files: ["javascript-tooling.js"],
-                }),
-            )
-            run(process.execPath, [compiler, "-p", "javascript-tooling-tsconfig.json"], consumer)
-            console.log("Packed checked-JavaScript inference, Result narrowing and invalid-input diagnostics passed")
-        }
-        const invocation =
-            kind === "default"
-                ? "import { createAndReadState } from './out/consumer.js'; if (createAndReadState('fixture-only-not-a-credential') !== 'Disconnected') throw Error('Unexpected state')"
-                : "import { Effect } from 'effect'; import { createWithinCallerScope } from './out/consumer.js'; const client = await Effect.runPromise(Effect.scoped(createWithinCallerScope('fixture-only-not-a-credential'))); if (client.state !== 'Closed') throw Error('Scope did not close client')"
-        run(process.execPath, ["--input-type=module", "--eval", invocation], consumer, 10_000)
-        const testingInvocation =
-            kind === "default"
-                ? "import { pingTest } from './out/testing-consumer.js'; const requests = await pingTest(); if (requests.length !== 1) throw Error('The respond handler did not run once')"
-                : "import { Effect } from 'effect'; import { pingTest } from './out/testing-consumer.js'; const requests = await Effect.runPromise(pingTest); if (requests.length !== 1) throw Error('The respond handler did not run once')"
-        run(process.execPath, ["--input-type=module", "--eval", testingInvocation], consumer, 15_000)
-        console.log(`${kind} TypeScript 7 packed consumer passed`)
-    }
-    const incompatibleEffect = join(temporary, "incompatible-effect")
-    mkdirSync(incompatibleEffect)
-    writeFileSync(join(incompatibleEffect, "package.json"), JSON.stringify({ name: "effect", version: "4.0.0-rc.116" }))
-    const incompatibleConsumer = join(temporary, "incompatible-consumer")
-    mkdirSync(incompatibleConsumer)
-    writeFileSync(
-        join(incompatibleConsumer, "package.json"),
-        JSON.stringify({
-            private: true,
-            type: "module",
-            dependencies: {
-                [manifest.name]: `file:${tarball.replaceAll("\\", "/")}`,
-                effect: `file:${incompatibleEffect.replaceAll("\\", "/")}`,
-            },
-        }),
-    )
-    writeFileSync(join(incompatibleConsumer, "pnpm-workspace.yaml"), "allowBuilds:\n  msgpackr-extract: false\n")
-    assert.throws(
-        () =>
-            packageManager(
-                ["install", "--prefer-offline", "--ignore-scripts", "--strict-peer-dependencies"],
-                incompatibleConsumer,
-            ),
-        (error) => /peer/i.test(String(error.stdout) + String(error.stderr)),
-        "An Effect version outside the peer range must fail strict peer installation rather than silently use separate runtimes",
-    )
-    console.log("Native Effect outside the peer range rejected by strict peer installation")
+    await Promise.all([
+        checkConsumer("default", staged, files, tarball),
+        checkConsumer("effect", staged, files, tarball),
+        checkIncompatibleEffect(tarball),
+    ])
 } finally {
     const target = realpathSync(temporary)
     assert.equal(dirname(target), temporaryRoot)

@@ -1,13 +1,11 @@
-import { availableParallelism } from "node:os"
+import { vitestWorkerCounts } from "../scripts/concurrency.mjs"
 
-// Local runs share the machine with other work, so they use half the threads, at most eight. CI runners are dedicated.
-// VITEST_MAX_WORKERS overrides the limit for local investigation
-const workers =
-    Number(process.env.VITEST_MAX_WORKERS) ||
-    (process.env.CI ? availableParallelism() : Math.max(1, Math.min(8, Math.floor(availableParallelism() / 2))))
+// Local runs scale dynamically from availableParallelism() (gentle on 2 to 4 cores, capped near 65% CPU on multi-core)
+// CI runners use every thread. VITEST_MAX_WORKERS and FLUXERLY_MAX_CONCURRENCY override the limit
+const { unit: workers, processes: processWorkers } = vitestWorkerCounts()
 
-// These files start child processes, so each worker can occupy several threads. They run as a second stage with one
-// worker fewer, which keeps the host from saturating without slowing the rest of the suite
+// These files start child processes, so each worker can occupy several threads. They run as a second stage with fewer
+// workers, which keeps the host from saturating without slowing the rest of the suite
 const processTests = [
     "tests/client/supervisor/**/*.test.ts",
     "tests/client/transport-process.test.ts",
@@ -56,14 +54,19 @@ export default {
         projects: [
             {
                 extends: true,
-                test: { name: "sdk", exclude: ["**/node_modules/**", "**/.git/**", "examples/**", ...processTests] },
+                test: {
+                    name: "sdk",
+                    // Unit tests never fork child processes or chdir, so worker threads avoid per-file process fork overhead
+                    pool: "threads",
+                    exclude: ["**/node_modules/**", "**/.git/**", "examples/**", ...processTests],
+                },
             },
             {
                 extends: true,
                 test: {
                     name: "processes",
                     include: processTests,
-                    maxWorkers: Math.max(1, workers - 1),
+                    maxWorkers: processWorkers,
                     // Worker limits differ from the first stage, so Vitest requires a separate group
                     sequence: { groupOrder: 1 },
                 },

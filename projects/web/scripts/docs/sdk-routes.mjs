@@ -6,8 +6,9 @@
 // certainty, such as a path segment of unknown shape or a method that depends on an unknown condition, is reported as
 // unresolved instead of guessed
 import ts from "typescript"
-import { readdirSync } from "node:fs"
-import { join } from "node:path"
+import { readdirSync, writeFileSync } from "node:fs"
+import { join, resolve } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 // Abstract values. A value is a list of alternatives, each one of these
 const TOP = Object.freeze({ k: "top" })
@@ -804,4 +805,13 @@ export function sdkOperations(sdk) {
         }
         return { name: entry.name, kind: entry.kind, routes: [...routes].sort(), unresolved: [...unresolved].sort() }
     })
+}
+
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+    const outAt = process.argv.indexOf("--write")
+    const sdkAt = process.argv.indexOf("--sdk")
+    const sdk = sdkAt >= 0 ? resolve(process.argv[sdkAt + 1]) : resolve(fileURLToPath(new URL("../../../sdk", import.meta.url)))
+    const operations = sdkOperations(sdk)
+    if (outAt >= 0) writeFileSync(resolve(process.argv[outAt + 1]), JSON.stringify(operations))
+    else console.log(JSON.stringify(operations))
 }

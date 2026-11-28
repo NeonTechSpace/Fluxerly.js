@@ -2,7 +2,7 @@
     "private": true,
     "scripts": {
         "build": "pnpm --filter @neontechspace/fluxerly build && pnpm --filter fluxerly-docs build",
-        "lint": "pnpm run lint:scripts && pnpm run lint:docs-links && pnpm --filter @neontechspace/fluxerly lint && pnpm --filter @fluxerly/release lint && pnpm --filter fluxerly-docs lint",
+        "lint": "node scripts/lint.mjs",
         "check": "node scripts/check.mjs",
         "verify:changed": "node scripts/check.mjs --changed",
         "verify:deep": "FLUXERLY_FUZZ_ITERATIONS=500 pnpm --filter @neontechspace/fluxerly exec vitest run tests/client/wire-fuzz.test.ts tests/client/rate-limits-model.test.ts tests/resources/cache/cache-linearizability.test.ts tests/events/event-source-property.test.ts tests/client/gateway-pacer-property.test.ts tests/client/chaos-simulation.test.ts",

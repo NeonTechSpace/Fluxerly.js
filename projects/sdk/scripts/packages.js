@@ -124,6 +124,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     assert.equal(arguments_[2], "--out")
     validateVersion(arguments_[1])
     assert.ok(isAbsolute(arguments_[3]))
-    build()
+    build({ clean: true })
     console.log(JSON.stringify(await stageRelease({ version: arguments_[1], output: arguments_[3] })))
 }

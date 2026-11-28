@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import vm from "node:vm"
-import { brotliCompressSync, gzipSync } from "node:zlib"
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib"
 import { buildPlaygroundTsAssets } from "../scripts/playground-ts-assets.mjs"
 import { selectPlaygroundNightly } from "../scripts/playground-channels.mjs"
 import { playgroundPresets } from "../src/islands/playground-presets.ts"
@@ -123,9 +123,11 @@ test("static TypeScript 6.0 Web Worker provides zero-error presets, member autoc
     assert.equal(harness.ready.hasEffect, false, "Non-Effect preset must not eagerly load Effect types")
     assert.deepEqual(harness.ready.diagnostics, [], "Initial preset should return clean diagnostics in ready payload")
     assert.equal(harness.fetchedUrls.length, 0, "Transferred coreBuffer avoids an extra fetch round-trip")
-    const workerBrKb = Math.round(brotliCompressSync(Buffer.from(harness.assets.workerCode)).length / 1024)
-    const coreBrKb = Math.round(brotliCompressSync(Buffer.from(harness.assets.coreJson)).length / 1024)
-    const effectBrKb = Math.round(brotliCompressSync(Buffer.from(harness.assets.effectJson)).length / 1024)
+    // Brotli quality 6 matches edge CDN compression and bounds max-quality size strictly without burning 15s on q11
+    const brotliOptions = { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 6 } }
+    const workerBrKb = Math.round(brotliCompressSync(Buffer.from(harness.assets.workerCode), brotliOptions).length / 1024)
+    const coreBrKb = Math.round(brotliCompressSync(Buffer.from(harness.assets.coreJson), brotliOptions).length / 1024)
+    const effectBrKb = Math.round(brotliCompressSync(Buffer.from(harness.assets.effectJson), brotliOptions).length / 1024)
     const coreGzKb = Math.round(gzipSync(Buffer.from(harness.assets.coreJson)).length / 1024)
     assert.ok(workerBrKb < 950, `Expected TS worker brotli < 950 KB, got ${workerBrKb} KB`)
     assert.ok(coreBrKb < 400, `Expected core types brotli < 400 KB, got ${coreBrKb} KB (gzip ${coreGzKb} KB)`)

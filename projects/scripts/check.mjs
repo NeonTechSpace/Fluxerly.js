@@ -8,66 +8,79 @@
 // action
 import { execFileSync, spawn } from "node:child_process"
 import { writeFileSync } from "node:fs"
-import { availableParallelism } from "node:os"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { cpuBudget } from "./concurrency.mjs"
 
 const workspace = fileURLToPath(new URL("../", import.meta.url))
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url))
 
-/** @typedef {{ name: string, group: string, folder: string, script: string, after?: string[], alone?: boolean }} Step */
+/** @typedef {{ name: string, group: string, folder: string, script: string, after?: string[], alone?: boolean, weight?: number, priority?: number }} Step */
 
 /** @type {Step[]} */
 const steps = [
-    { name: "contributions", group: "contributions", folder: ".", script: "check:contributions" },
-    // The workspace scripts, this runner among them, which no other group lints
-    { name: "scripts lint", group: "contributions", folder: ".", script: "lint:scripts" },
-    { name: "docs links", group: "contributions", folder: ".", script: "lint:docs-links" },
-    { name: "release", group: "release", folder: "release", script: "test" },
+    // Start sdk build first on the critical path so downstream SDK and website steps never stall behind long suites
+    { name: "sdk build", group: "sdk", folder: "sdk", script: "build", weight: 3, priority: 100 },
+    { name: "web build", group: "web", folder: "web", script: "build", after: ["sdk build"], weight: 3, priority: 95 },
+    { name: "web types", group: "web", folder: "web", script: "check:types", after: ["web build"], weight: 2, priority: 85 },
+    { name: "sdk package", group: "sdk", folder: "sdk", script: "test:package", after: ["sdk build"], weight: 3, priority: 90 },
+    // Unit tests use fixtures, not the build. Process tests run the built SDK. On small and CI machines each runs alone
+    // so timing-bounded tests never contend for CPU. On high-core local machines (CPU budget >= 10, capped at 65% of
+    // physical cores) each takes a large weighted share so the two Vitest suites still never overlap each other while
+    // critical-path build and package steps overlap within the machine's 65% CPU ceiling
+    { name: "sdk unit tests", group: "sdk", folder: "sdk", script: "test:unit", alone: true, priority: 88 },
+    { name: "sdk process tests", group: "sdk", folder: "sdk", script: "test:processes", after: ["sdk build"], alone: true, priority: 80 },
 
-    // Start sdk build first on the critical path so downstream SDK and website steps never stall behind exclusive test suites
-    { name: "sdk build", group: "sdk", folder: "sdk", script: "build" },
-    { name: "sdk format", group: "sdk", folder: "sdk", script: "format:check" },
-    ...["code", "discards", "mapping", "dashes", "test-invariants", "effect", "unused", "spelling"].map((lint) => ({
+    { name: "contributions", group: "contributions", folder: ".", script: "check:contributions", weight: 1, priority: 30 },
+    // The workspace scripts, this runner among them, which no other group lints
+    { name: "scripts lint", group: "contributions", folder: ".", script: "lint:scripts", weight: 1, priority: 30 },
+    { name: "docs links", group: "contributions", folder: ".", script: "lint:docs-links", weight: 1, priority: 30 },
+    { name: "release", group: "release", folder: "release", script: "test", weight: 2, priority: 40 },
+
+    { name: "sdk format", group: "sdk", folder: "sdk", script: "format:check", weight: 1, priority: 50 },
+    ...["effect", "code", "spelling", "test-invariants", "unused", "mapping", "discards", "dashes"].map((lint) => ({
         name: `sdk lint ${lint}`,
         group: "sdk",
         folder: "sdk",
         script: `lint:${lint}`,
+        weight: lint === "effect" || lint === "code" ? 3 : 1,
+        priority: lint === "effect" || lint === "code" ? 60 : 35,
     })),
-    { name: "sdk examples", group: "sdk", folder: "sdk", script: "test:examples", after: ["sdk build"] },
-    { name: "sdk public contract", group: "sdk", folder: "sdk", script: "test:public-contract", after: ["sdk build"] },
-    { name: "sdk types", group: "sdk", folder: "sdk", script: "test:types", after: ["sdk build"] },
-    { name: "sdk packaging", group: "sdk", folder: "sdk", script: "test:packaging", after: ["sdk build"] },
-    { name: "sdk package", group: "sdk", folder: "sdk", script: "test:package", after: ["sdk build"] },
-    // The unit tests use fixtures, not the build. The process tests run the built SDK. Both start a worker per thread and
-    // hold timing-bounded tests, so each runs alone rather than beside other steps on a small machine such as CI's
-    { name: "sdk unit tests", group: "sdk", folder: "sdk", script: "test:unit", alone: true },
-    { name: "sdk process tests", group: "sdk", folder: "sdk", script: "test:processes", after: ["sdk build"], alone: true },
+    { name: "sdk examples", group: "sdk", folder: "sdk", script: "test:examples", after: ["sdk build"], weight: 1, priority: 45 },
+    { name: "sdk public contract", group: "sdk", folder: "sdk", script: "test:public-contract", after: ["sdk build"], weight: 2, priority: 55 },
+    { name: "sdk types", group: "sdk", folder: "sdk", script: "test:types", after: ["sdk build"], weight: 3, priority: 65 },
+    { name: "sdk packaging", group: "sdk", folder: "sdk", script: "test:packaging", after: ["sdk build"], weight: 1, priority: 45 },
 
     // The site lint and build read the SDK's built declarations and examples, and its tests and search check read the built site
-    { name: "web lint", group: "web", folder: "web", script: "lint", after: ["sdk build"] },
-    { name: "web build", group: "web", folder: "web", script: "build", after: ["sdk build"] },
-    { name: "web types", group: "web", folder: "web", script: "check:types", after: ["web build"] },
-    { name: "web tests", group: "web", folder: "web", script: "test", after: ["web build"] },
-    { name: "web search", group: "web", folder: "web", script: "test:search", after: ["web build"] },
+    { name: "web lint", group: "web", folder: "web", script: "lint", after: ["sdk build"], weight: 2, priority: 50 },
+    { name: "web tests", group: "web", folder: "web", script: "test", after: ["web build"], weight: 2, priority: 75 },
+    { name: "web search", group: "web", folder: "web", script: "test:search", after: ["web build"], weight: 3, priority: 78 },
 
     // The deployed site, built from the published versions' snapshots. It also expects a built SDK
-    { name: "public lint", group: "public", folder: "web", script: "lint" },
-    { name: "public generate", group: "public", folder: "web", script: "generate" },
-    { name: "public build", group: "public", folder: "web", script: "build:public", after: ["public generate"] },
-    { name: "public types", group: "public", folder: "web", script: "check:types", after: ["public build"] },
-    { name: "public tests", group: "public", folder: "web", script: "test", after: ["public build"] },
+    { name: "public lint", group: "public", folder: "web", script: "lint", weight: 2, priority: 50 },
+    { name: "public generate", group: "public", folder: "web", script: "generate", weight: 2, priority: 90 },
+    { name: "public build", group: "public", folder: "web", script: "build:public", after: ["public generate"], weight: 3, priority: 95 },
+    { name: "public types", group: "public", folder: "web", script: "check:types", after: ["public build"], weight: 2, priority: 85 },
+    { name: "public tests", group: "public", folder: "web", script: "test", after: ["public build"], weight: 2, priority: 75 },
 ]
 
-/** @param {string} script @param {string} cwd */
-function run(script, cwd) {
+/**
+ * @param {string} script
+ * @param {string} cwd
+ * @param {NodeJS.ProcessEnv} [extraEnv]
+ */
+function run(script, cwd, extraEnv = {}) {
     // Inside pnpm, npm_execpath is pnpm's own entry, which starts without a shell on every platform
     const pnpm = process.env.npm_execpath
     const [command, args] = pnpm?.endsWith(".js") || pnpm?.endsWith(".cjs") ? [process.execPath, [pnpm]] : ["pnpm", []]
     return new Promise((done) => {
         const child = spawn(command, [...args, "run", script], {
             cwd,
-            env: { ...process.env, FORCE_COLOR: process.env.FORCE_COLOR ?? (process.stdout.isTTY ? "1" : "0") },
+            env: {
+                ...process.env,
+                ...extraEnv,
+                FORCE_COLOR: process.env.FORCE_COLOR ?? (process.stdout.isTTY ? "1" : "0"),
+            },
             shell: command === "pnpm" && process.platform === "win32",
             windowsHide: true,
         })
@@ -101,6 +114,39 @@ export function failureLine(output) {
     return (useful.find((line) => errorLine.test(line)) ?? useful.at(-1) ?? "No output").slice(0, 300)
 }
 
+/**
+ * Computes the slot demand and child concurrency limits for one check step
+ * @param {Step} step
+ * @param {number} total
+ * @returns {{ need: number, exclusive: boolean, env: NodeJS.ProcessEnv }}
+ */
+function stepResources(step, total) {
+    if (step.alone) {
+        if (total < 10) return { need: total, exclusive: true, env: {} }
+        // High-core local machine: Allocate over half of the 65% CPU budget so unit and process suites never overlap
+        // each other, while critical-path build and package work shares the remaining slots within the host ceiling
+        const need = Math.max(6, Math.min(total - 6, Math.ceil(total * 0.55)))
+        const env = process.env.VITEST_MAX_WORKERS ? {} : { VITEST_MAX_WORKERS: String(need) }
+        return { need, exclusive: false, env }
+    }
+    const need = Math.max(1, Math.min(total, step.weight ?? 1))
+    /** @type {NodeJS.ProcessEnv} */
+    const env = {}
+    if (step.script === "test:package" && !process.env.FLUXERLY_PACKAGE_CONCURRENCY && total >= 4) {
+        env.FLUXERLY_PACKAGE_CONCURRENCY = String(Math.max(1, Math.min(4, need)))
+    }
+    if (step.script === "test:search" && !process.env.FLUXERLY_SEARCH_WORKERS && total >= 4) {
+        env.FLUXERLY_SEARCH_WORKERS = String(Math.max(1, Math.min(6, need + 1)))
+    }
+    if ((step.script === "lint:effect" || step.script === "lint:code" || step.script === "test:types") && !process.env.GOMAXPROCS && total >= 4) {
+        env.GOMAXPROCS = String(Math.max(2, Math.min(total, need * 2)))
+    }
+    if (step.script === "lint:code" && !process.env.RAYON_NUM_THREADS && total >= 4) {
+        env.RAYON_NUM_THREADS = String(Math.max(2, Math.min(total, need * 2)))
+    }
+    return { need, exclusive: false, env }
+}
+
 /** @param {string[]} groups */
 async function check(groups) {
     const unknown = groups.filter((group) => !steps.some((step) => step.group === group))
@@ -116,24 +162,30 @@ async function check(groups) {
     const skipped = []
     /** @type {Map<string, { name: string, result: string, ms: number, command: string, error?: string, blockedBy?: string }>} */
     const report = new Map()
-    // Heavy steps start their own workers, so more steps than threads would only slow each other down.
-    // Non-exclusive steps fill free slots ahead of waiting exclusive steps so critical-path builds and lints never
-    // stall behind a full-machine test suite, while exclusive steps still run in FIFO order once all slots are free
-    const total = Math.max(2, availableParallelism())
+    // Slot budget scales from availableParallelism(): Gentle on 2 to 4 cores, capped near 65% on multi-core local hosts,
+    // and full-runner on CI. Non-exclusive steps fill free slots ahead of waiting exclusive steps so builds and lints
+    // never stall behind an exclusive test suite, while exclusive steps still run in FIFO order once all slots are free
+    const total = cpuBudget({ envVar: "FLUXERLY_CHECK_SLOTS" })
     let free = total
-    /** @type {{ need: number, go: () => void }[]} */
+    /** @type {{ need: number, exclusive: boolean, priority: number, go: () => void }[]} */
     const queue = []
     const pump = () => {
         while (queue.length > 0) {
-            const index = queue.findIndex((item) => item.need <= free && (item.need < total || free === total))
-            if (index === -1) break
-            const [next] = queue.splice(index, 1)
+            let best = -1
+            for (let index = 0; index < queue.length; index++) {
+                const item = queue[index]
+                if (item.need > free || (item.exclusive && free !== total)) continue
+                if (best === -1 || item.priority > queue[best].priority) best = index
+            }
+            if (best === -1) break
+            const [next] = queue.splice(best, 1)
             free -= next.need
             next.go()
         }
     }
-    /** @param {number} need */
-    const slot = (need) => new Promise((go) => (queue.push({ need, go: () => go(undefined) }), pump()))
+    /** @param {number} need @param {boolean} exclusive @param {number} priority */
+    const slot = (need, exclusive, priority) =>
+        new Promise((go) => (queue.push({ need, exclusive, priority, go: () => go(undefined) }), pump()))
     /** @param {number} need */
     const release = (need) => ((free += need), pump())
 
@@ -146,10 +198,10 @@ async function check(groups) {
             report.set(step.name, { name: step.name, result: "skipped", ms: 0, command: commandOf(step), blockedBy: before[passed.indexOf(false)] })
             return false
         }
-        const need = step.alone ? total : 1
-        await slot(need)
+        const { need, exclusive, env } = stepResources(step, total)
+        await slot(need, exclusive, step.priority ?? 0)
         const from = Date.now()
-        const { code, output } = await run(step.script, resolve(workspace, step.folder)).finally(() => release(need))
+        const { code, output } = await run(step.script, resolve(workspace, step.folder), env).finally(() => release(need))
         const ms = Date.now() - from
         console.log(`${code === 0 ? "passed" : "FAILED"}  ${step.name}  ${seconds(ms)}`)
         report.set(step.name, {
