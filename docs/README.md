@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://fluxerly.neontechspace.com/"><img src="/docs/assets/banner.jpg" width="720" alt="Fluxerly.js, a Fluxer-native bot SDK. A few lines of bot code and the conductor mascot answering Pong!"></a>
+  <a href="https://fluxerly.neontechspace.com/"><img src="/docs/assets/banner.jpg" width="720" alt="Fluxerly.js, a Fluxer-native bot SDK for JavaScript, TypeScript and Effect, with the cosmic conductor floating above cyan-lit midnight water"></a>
 </p>
 
 <h1 align="center">Fluxerly.js</h1>
